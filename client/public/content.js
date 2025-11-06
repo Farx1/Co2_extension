@@ -63,7 +63,7 @@ let isInitialized = false;
 let interceptedDataCache = new Map(); // Cache des données interceptées
 let processedMessages = new Set(); // Déduplication (en mémoire)
 let processedMessagesPersistent = new Set(); // Déduplication persistante (stockée) - initialisé dans loadProcessedMessages
-let streamingMessages = new Map(); // Gestion du streaming
+let pendingAssistantMessages = new Map(); // Map: messageId -> { element, text, timeout } - pour debounce des messages assistant
 let detectedModel = null; // Modèle détecté
 let conversationId = null; // ID de la conversation actuelle
 
@@ -272,7 +272,8 @@ function setupMessageListener() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'SCAN_CONVERSATION') {
       // Forcer un scan de tous les messages de la conversation actuelle
-      console.log('🔍 Scan manuel de la conversation demandé');
+      const forceRescan = message.forceRescan || false; // Option pour forcer le re-traitement
+      console.log('🔍 Scan manuel de la conversation demandé', forceRescan ? '(force rescan)' : '');
       
       // S'assurer que le script est initialisé
       (async () => {
@@ -286,7 +287,31 @@ function setupMessageListener() {
             isInitialized = true;
           }
           
-          const result = await scanConversation();
+          // Si forceRescan est activé, réinitialiser les messages traités pour cette conversation
+          if (forceRescan) {
+            console.log('🔄 Réinitialisation des messages traités pour cette conversation...');
+            processedMessages.clear();
+            processedMessagesPersistent.clear();
+            
+            // Supprimer aussi du storage
+            const result = await chrome.storage.local.get(['processedMessagesMap']);
+            const storedMap = result.processedMessagesMap || {};
+            delete storedMap[conversationId];
+            await chrome.storage.local.set({ processedMessagesMap: storedMap });
+            console.log('✓ Messages traités réinitialisés pour cette conversation');
+            
+            // S'assurer que conversationId est défini avant de scanner
+            if (!conversationId) {
+              conversationId = generateConversationId();
+            }
+          } else {
+            // Si pas de forceRescan, charger les messages traités si nécessaire
+            if (!processedMessagesPersistent.size) {
+              await loadProcessedMessages();
+            }
+          }
+          
+          const result = await scanConversation(forceRescan);
           sendResponse(result);
         } catch (error) {
           console.error('❌ Erreur scan conversation:', error);
@@ -307,14 +332,15 @@ function setupMessageListener() {
 
 /**
  * Scanner manuellement toute la conversation actuelle
+ * @param {boolean} forceRescan - Si true, ignore le cache des messages traités et re-traite tout
  */
-async function scanConversation() {
+async function scanConversation(forceRescan = false) {
   try {
     if (!platform) {
       return { success: false, error: 'Plateforme non supportée' };
     }
     
-    console.log('🔍 Démarrage du scan manuel de la conversation...');
+    console.log('🔍 Démarrage du scan manuel de la conversation...', forceRescan ? '(force rescan activé)' : '');
     
     // S'assurer que l'initialisation est faite si nécessaire
     if (!isInitialized) {
@@ -334,16 +360,16 @@ async function scanConversation() {
     
     console.log(`📊 ${allMessages.length} messages trouvés, analyse en cours...`);
     
-    // Analyser tous les messages (la fonction analyzeMessages gère déjà la déduplication)
-    await analyzeMessages(allMessages);
+    // Analyser tous les messages (la fonction analyzeMessages gère la déduplication sauf si forceRescan)
+    const newMessagesCount = await analyzeMessages(allMessages, forceRescan);
     
-    const scannedCount = allMessages.length;
-    console.log(`✅ Scan terminé: ${scannedCount} messages analysés`);
+    console.log(`✅ Scan terminé: ${newMessagesCount} nouveau(x) message(s) analysé(s) sur ${allMessages.length} total`);
     
     return {
       success: true,
-      scanned: scannedCount,
-      message: `${scannedCount} message(s) analysé(s)`
+      scanned: newMessagesCount,
+      total: allMessages.length,
+      message: `${newMessagesCount} nouveau(x) message(s) analysé(s) sur ${allMessages.length} total`
     };
     
   } catch (error) {
@@ -416,14 +442,88 @@ async function saveProcessedMessage(hash) {
   }
 }
 
+// Debounce pour limiter la fréquence des vérifications
+let checkMessagesTimeout = null;
+
 /**
  * Observer les nouveaux messages
  */
 function observeMessages() {
   // Observer le conteneur de messages
   const observer = new MutationObserver((mutations) => {
+    // Filtrer les mutations pour ignorer celles de la zone de saisie ET des messages assistant
+    const hasRelevantChanges = mutations.some(mutation => {
+      const target = mutation.target;
+      
+      // Obtenir l'élément cible (si target n'est pas un Element, essayer de trouver un parent Element)
+      let targetElement = null;
+      if (target instanceof Element) {
+        targetElement = target;
+      } else if (target && target.nodeType) {
+        // C'est un Text node, Comment, ou autre type de node - chercher le parent Element
+        let currentNode = target.parentNode;
+        while (currentNode && !(currentNode instanceof Element)) {
+          currentNode = currentNode.parentNode;
+        }
+        targetElement = currentNode instanceof Element ? currentNode : null;
+      }
+      
+      // Si on n'a pas d'élément valide, ignorer cette mutation
+      if (!targetElement || !(targetElement instanceof Element)) {
+        return false;
+      }
+      
+      // Vérifier que closest est une fonction avant de l'utiliser
+      if (typeof targetElement.closest !== 'function') {
+        return false;
+      }
+      
+      // IGNORER: Les changements dans les zones de saisie, textarea, input
+      try {
+        if (targetElement.tagName === 'TEXTAREA' || targetElement.tagName === 'INPUT' || 
+            targetElement.closest('textarea') || targetElement.closest('input') ||
+            (targetElement.closest('[contenteditable="true"]') && targetElement.closest('[role="textbox"]'))) {
+          return false;
+        }
+        
+        // IGNORER: Tous les changements dans les conteneurs de messages assistant
+        // ChatGPT écrit ses réponses dans ces éléments, on ne veut pas déclencher d'analyse pendant l'écriture
+        const assistantContainer = targetElement.closest('div[data-message-author-role="assistant"]');
+        if (assistantContainer) {
+          // C'est un changement dans un message assistant - IGNORER
+          return false;
+        }
+      } catch (error) {
+        // Si closest() échoue pour une raison quelconque, ignorer cette mutation
+        console.warn('Erreur lors de l\'appel à closest():', error, targetElement);
+        return false;
+      }
+      
+      // IGNORER: Les changements de caractères dans des éléments non-messages
+      if (mutation.type === 'characterData') {
+        const parent = targetElement.parentElement;
+        if (!parent || !parent.hasAttribute('data-message-author-role')) {
+          return false;
+        }
+        // Si c'est un changement de caractères dans un message assistant, ignorer aussi
+        if (parent.getAttribute('data-message-author-role') === 'assistant') {
+          return false;
+        }
+      }
+      
+      return true;
+    });
+    
+    if (!hasRelevantChanges) return;
+    
+    // Debounce pour checkForNewMessages (500ms)
+    if (checkMessagesTimeout) {
+      clearTimeout(checkMessagesTimeout);
+    }
+    checkMessagesTimeout = setTimeout(() => {
     checkForNewMessages();
-    checkStreamingMessages();
+    }, 500);
+    
   });
   
   // Observer tout le body pour capturer les changements
@@ -435,6 +535,90 @@ function observeMessages() {
   
   // Vérification initiale
   setTimeout(() => checkForNewMessages(), 2000);
+}
+
+/**
+ * [FONCTION OBSOLÈTE - REMPLACÉE PAR DEBOUNCE]
+ * Cette fonction n'est plus utilisée - on utilise maintenant un système de debounce simple
+ */
+function observeStopButton_OBSOLETE() {
+  // Fonction pour vérifier l'état du bouton
+  function checkStopButton() {
+    // Essayer plusieurs sélecteurs pour être sûr de trouver le bouton
+    const stopButton1 = document.querySelector('button[data-testid="stop-button"]');
+    const stopButton2 = document.querySelector('button[aria-label="Arrêter le streaming"]');
+    const stopButton3 = document.querySelector('button[aria-label*="Arrêter"]');
+    const stopButton4 = document.querySelector('button.composer-submit-btn[data-testid="stop-button"]');
+    const stopButton = stopButton1 || stopButton2 || stopButton3 || stopButton4;
+    
+    // Vérifier que le bouton existe ET est visible
+    const buttonExists = stopButton !== null && stopButton.offsetParent !== null;
+    
+    // Si le bouton apparaît (streaming commence)
+    if (buttonExists && !isCurrentlyStreaming) {
+      console.log('🟢 Streaming DÉMARRÉ (bouton stop détecté) - isCurrentlyStreaming = true');
+      isCurrentlyStreaming = true;
+    }
+    
+    // Si le bouton disparaît (streaming terminé)
+    if (!buttonExists && isCurrentlyStreaming) {
+      console.log('🔴 Streaming TERMINÉ (bouton stop disparu) - isCurrentlyStreaming = false');
+      isCurrentlyStreaming = false;
+      
+      // Traiter tous les messages en streaming qui sont maintenant terminés
+      // Attendre un peu pour s'assurer que le texte final est bien là
+      setTimeout(() => {
+        checkStreamingMessages();
+      }, 200);
+    }
+    
+    // Log périodique pour debug (seulement si le flag change)
+    if (buttonExists !== isCurrentlyStreaming) {
+      console.log('⚠️ État incohérent détecté - buttonExists:', buttonExists, 'isCurrentlyStreaming:', isCurrentlyStreaming);
+    }
+  }
+  
+  // Vérification initiale
+  checkStopButton();
+  
+  // Observer les changements dans le DOM pour détecter l'apparition/disparition du bouton
+  if (stopButtonObserver) {
+    stopButtonObserver.disconnect();
+  }
+  
+  stopButtonObserver = new MutationObserver((mutations) => {
+    // Vérifier seulement si c'est une mutation pertinente (ajout/suppression d'éléments)
+    const hasRelevantChange = mutations.some(mutation => {
+      return mutation.type === 'childList' || 
+             (mutation.type === 'attributes' && 
+              (mutation.attributeName === 'aria-label' || 
+               mutation.attributeName === 'data-testid' || 
+               mutation.attributeName === 'class'));
+    });
+    
+    if (hasRelevantChange) {
+      checkStopButton();
+    }
+  });
+  
+  // Observer la zone du composer (où se trouve le bouton)
+  // Essayer plusieurs sélecteurs pour trouver la zone du bouton
+  const composerArea = document.querySelector('form') || 
+                      document.querySelector('[role="textbox"]')?.closest('div')?.parentElement ||
+                      document.querySelector('div[data-testid*="composer"]') ||
+                      document.querySelector('div[class*="composer"]') ||
+                      document.body;
+  
+  stopButtonObserver.observe(composerArea || document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['aria-label', 'data-testid', 'class']
+  });
+  
+  // Vérifier périodiquement aussi (au cas où l'observer rate quelque chose)
+  // Intervalle plus court pour une détection plus rapide
+  setInterval(checkStopButton, 200);
 }
 
 /**
@@ -460,6 +644,40 @@ async function checkForNewMessages() {
       const hash = generateMessageHash(messageEl, text);
       if (!hash) continue;
       
+      // Pour les messages assistant, TOUJOURS les ignorer dans checkForNewMessages
+      // Ils seront gérés uniquement par le debounce dans analyzeMessages
+      // Cela évite de créer plusieurs timeouts pour le même message
+      if (isAssistantMessage(messageEl)) {
+        const messageId = generateMessageId(messageEl);
+        
+        // Si le message est déjà en attente dans le debounce, l'ignorer COMPLÈTEMENT
+        // Peu importe le hash, on ne veut pas le re-traiter
+        if (pendingAssistantMessages.has(messageId)) {
+          processedCount++;
+          continue;
+        }
+        
+        // Si c'est un nouveau message assistant (pas encore dans pendingAssistantMessages),
+        // l'ajouter à newMessages UNE SEULE FOIS pour qu'il soit géré par analyzeMessages
+        // qui créera le debounce. Mais seulement si aucun hash de ce message n'a été traité.
+        // On vérifie tous les hashes possibles de ce message en regardant les messages traités
+        // qui ont le même messageId (mais c'est complexe, donc on utilise une approche plus simple)
+        
+        // Approche simple: si le message n'est pas dans pendingAssistantMessages ET
+        // qu'aucun hash similaire n'a été traité, l'ajouter
+        const isAlreadyProcessed = Array.from(processedMessagesPersistent).some(h => {
+          // Vérifier si ce hash pourrait être du même message (approximation)
+          return h.includes(messageId.substring(0, 20)) || h.includes(text.substring(0, 30));
+        });
+        
+        if (!isAlreadyProcessed && !processedMessages.has(hash) && !processedMessagesPersistent.has(hash)) {
+          newMessages.push(messageEl);
+        } else {
+          processedCount++;
+        }
+        continue; // Ne pas continuer avec le traitement normal
+      }
+      
       // Vérifier dans les deux sets (mémoire + persistants)
       if (!processedMessages.has(hash) && !processedMessagesPersistent.has(hash)) {
         newMessages.push(messageEl);
@@ -481,44 +699,18 @@ async function checkForNewMessages() {
 }
 
 /**
- * Vérifier les messages en streaming
+ * [FONCTION OBSOLÈTE - REMPLACÉE PAR DEBOUNCE]
+ * Cette fonction n'est plus utilisée - on utilise maintenant un système de debounce simple
  */
-function checkStreamingMessages() {
-  const messages = findMessages();
-  
-  for (const messageEl of messages) {
-    if (isAssistantMessage(messageEl)) {
-      const messageId = generateMessageId(messageEl);
-      const currentText = extractMessageText(messageEl);
-      
-      if (streamingMessages.has(messageId)) {
-        const existing = streamingMessages.get(messageId);
-        if (existing.text !== currentText) {
-          // Message en cours de streaming
-          existing.text = currentText;
-          existing.lastUpdate = Date.now();
-          existing.element = messageEl;
-        } else if (Date.now() - existing.lastUpdate > 2000) {
-          // Message complet (plus de changements depuis 2s)
-          processCompleteStreamingMessage(existing);
-          streamingMessages.delete(messageId);
-        }
-      } else if (currentText && currentText.length > 0) {
-        // Nouveau message potentiellement en streaming
-        streamingMessages.set(messageId, {
-          element: messageEl,
-          text: currentText,
-          lastUpdate: Date.now()
-        });
-      }
-    }
-  }
+function checkStreamingMessages_OBSOLETE() {
+  // Fonction obsolète - remplacée par le système de debounce
 }
 
 /**
- * Traiter un message streaming complet
+ * [FONCTION OBSOLÈTE - REMPLACÉE PAR processAssistantMessage]
+ * Cette fonction n'est plus utilisée
  */
-async function processCompleteStreamingMessage(messageData) {
+async function processCompleteStreamingMessage_OBSOLETE(messageData) {
   const element = messageData.element;
   const text = messageData.text;
   
@@ -526,13 +718,17 @@ async function processCompleteStreamingMessage(messageData) {
   const hash = generateMessageHash(element, text);
   if (!hash) return;
   
+  // Si le message a déjà été traité (marqué pendant le streaming), on ne le traite pas à nouveau
+  // Sauf si c'est la première fois qu'on le voit complet
   if (processedMessages.has(hash) || processedMessagesPersistent.has(hash)) {
-    return;
+    // Vérifier si c'est juste qu'il a été marqué pendant le streaming mais pas encore traité complètement
+    // On peut le traiter maintenant car c'est la version complète
+    console.log('✅ Message streaming complet (déjà marqué, traitement final):', hash.substring(0, 50));
+  } else {
+    // Marquer comme traité
+    processedMessages.add(hash);
+    await saveProcessedMessage(hash);
   }
-  
-  // Marquer comme traité
-  processedMessages.add(hash);
-  await saveProcessedMessage(hash);
   
   // Estimer les tokens
   const tokens = estimateTokens(text);
@@ -622,7 +818,8 @@ function generateMessageId(element) {
 }
 
 /**
- * Générer un hash stable pour déduplication (sans timestamp)
+ * Générer un hash stable pour déduplication
+ * Priorité: data-message-id (ChatGPT) > contenu normalisé
  */
 function generateMessageHash(element, text) {
   if (!text || text.trim().length === 0) {
@@ -631,7 +828,16 @@ function generateMessageHash(element, text) {
   
   const role = isUserMessage(element) ? 'user' : 'assistant';
   
-  // Utiliser un hash basé uniquement sur le contenu (pas de timestamp)
+  // Pour ChatGPT, utiliser data-message-id en priorité (le plus fiable)
+  if (element.hasAttribute('data-message-author-role')) {
+    const messageId = element.getAttribute('data-message-id');
+    if (messageId) {
+      // Hash basé sur l'ID stable + conversation + role
+      return `${conversationId}-${role}-${messageId}`;
+    }
+  }
+  
+  // Fallback: utiliser un hash basé sur le contenu
   // Normaliser le texte: supprimer les espaces multiples, convertir en minuscules
   const normalizedText = text.trim()
     .replace(/\s+/g, ' ')
@@ -646,14 +852,8 @@ function generateMessageHash(element, text) {
     hash = hash & hash; // Convertir en 32-bit integer
   }
   
-  // Utiliser aussi le messageId stable si disponible
-  const messageId = generateMessageId(element);
-  const messageIdHash = messageId.startsWith('stable-') || messageId.startsWith('content-') 
-    ? messageId 
-    : '';
-  
-  // Combiner role + hash du contenu + ID stable
-  return `${conversationId}-${role}-${Math.abs(hash)}${messageIdHash ? '-' + messageIdHash : ''}`;
+  // Combiner role + hash du contenu
+  return `${conversationId}-${role}-${Math.abs(hash)}`;
 }
 
 /**
@@ -667,8 +867,15 @@ function isUIMessage(element) {
   }
   
   // Ne jamais exclure les éléments qui sont dans un conteneur avec data-message-author-role
-  if (element.closest('[data-message-author-role]')) {
-    return false;
+  if (element instanceof Element && typeof element.closest === 'function') {
+    try {
+      if (element.closest('[data-message-author-role]')) {
+        return false;
+      }
+    } catch (error) {
+      console.warn('Erreur lors de l\'appel à closest() dans isUIMessage:', error, element);
+      // En cas d'erreur, continuer le traitement normal
+    }
   }
   
   const text = element.textContent || '';
@@ -869,12 +1076,32 @@ function findMessages() {
           }
           
           // Ignorer les éléments qui ne sont pas des divs (sauf exceptions)
-          if (node.tagName !== 'DIV' && !node.closest('div[data-message-author-role]')) {
-            return false;
+          if (node.tagName !== 'DIV') {
+            // Vérifier que node est un Element et que closest est disponible
+            if (!(node instanceof Element) || typeof node.closest !== 'function') {
+              return false;
+            }
+            try {
+              if (!node.closest('div[data-message-author-role]')) {
+                return false;
+              }
+            } catch (error) {
+              console.warn('Erreur lors de l\'appel à closest() pour node:', error, node);
+              return false;
+            }
           }
           
           // Pour les autres éléments, vérifier s'ils sont dans un conteneur de message
-          const messageContainer = node.closest('[data-message-author-role]');
+          if (!(node instanceof Element) || typeof node.closest !== 'function') {
+            return false;
+          }
+          let messageContainer = null;
+          try {
+            messageContainer = node.closest('[data-message-author-role]');
+          } catch (error) {
+            console.warn('Erreur lors de l\'appel à closest() pour messageContainer:', error, node);
+            return false;
+          }
           if (messageContainer) {
             // C'est un sous-élément d'un message (comme <p data-start="..." data-end="...">)
             // Ne pas l'exclure - on utilisera le conteneur parent pour extraire le texte
@@ -885,7 +1112,6 @@ function findMessages() {
           
           // Ignorer les éléments UI (vérifier AVANT extraction pour performance)
           if (isUIMessage(node)) {
-            console.log('⏭️ Élément UI exclu:', node.textContent?.substring(0, 50) || 'N/A');
             return false;
           }
           
@@ -917,7 +1143,6 @@ function findMessages() {
           const isInstructionUI = shortcutCount >= 2 && extractedTrimmed.length < 150;
           
           if (isChatGPTUI || isInstructionUI) {
-            console.log('⏭️ Message UI détecté après extraction, exclu:', extractedTrimmed.substring(0, 80));
             return false;
           }
           
@@ -977,7 +1202,6 @@ function findMessages() {
           const isInstructionUI = shortcutCount >= 2 && extractedTrimmed.length < 300;
           
           if (isChatGPTUI || isInstructionUI) {
-            console.log('⏭️ Message UI détecté après extraction, exclu:', extractedTrimmed.substring(0, 80));
             return false;
           }
           
@@ -998,8 +1222,13 @@ function findMessages() {
 
 /**
  * Analyser les nouveaux messages
+ * @param {Array} messages - Liste des éléments DOM de messages
+ * @param {boolean} forceRescan - Si true, ignore le cache et re-traite tous les messages
+ * @returns {Promise<number>} - Nombre de nouveaux messages traités
  */
-async function analyzeMessages(messages) {
+async function analyzeMessages(messages, forceRescan = false) {
+  let newMessagesCount = 0;
+  
   for (const messageEl of messages) {
     try {
       // Générer un hash pour déduplication
@@ -1009,15 +1238,17 @@ async function analyzeMessages(messages) {
       const hash = generateMessageHash(messageEl, text);
       if (!hash) continue;
       
-      // Vérifier dans les deux sets (mémoire + persistants)
-      if (processedMessages.has(hash) || processedMessagesPersistent.has(hash)) {
+      // Vérifier dans les deux sets (mémoire + persistants) sauf si forceRescan
+      if (!forceRescan && (processedMessages.has(hash) || processedMessagesPersistent.has(hash))) {
         console.log('⏭️ Message déjà traité, ignoré:', hash.substring(0, 50));
         continue; // Déjà traité
       }
       
-      // Marquer comme traité dans les deux sets
-      processedMessages.add(hash);
-      await saveProcessedMessage(hash);
+      // Si forceRescan, retirer le hash du cache pour le re-traiter
+      if (forceRescan) {
+        processedMessages.delete(hash);
+        processedMessagesPersistent.delete(hash);
+      }
       
       // Déterminer le type de message (user ou assistant)
       const isUser = isUserMessage(messageEl);
@@ -1025,127 +1256,220 @@ async function analyzeMessages(messages) {
       
       if (!isUser && !isAssistant) continue;
       
+      // RÈGLE SIMPLE: Pour les messages assistant, utiliser un debounce
+      // TOUS les messages assistant passent par le debounce, sans exception
+      if (isAssistant) {
+        const messageId = generateMessageId(messageEl);
+        
+        // Si le message est déjà en attente, annuler le timeout précédent et en créer un nouveau
+        // avec le texte mis à jour
+        if (pendingAssistantMessages.has(messageId)) {
+          const pending = pendingAssistantMessages.get(messageId);
+          clearTimeout(pending.timeout);
+          console.log('🔄 Message assistant déjà en attente, timeout précédent annulé');
+        } else {
+          console.log('🆕 Nouveau message assistant détecté, création du debounce');
+        }
+        
+        // Toujours créer/mettre à jour le timeout pour ce message
+        // Le timeout sera annulé et recréé à chaque fois que le texte change
+        const processMessage = async () => {
+          // Vérifier que le message existe toujours
+          if (!messageEl || !messageEl.isConnected) {
+            pendingAssistantMessages.delete(messageId);
+            return;
+          }
+          
+          const currentText = extractMessageText(messageEl);
+          if (!currentText || currentText.trim().length === 0) {
+            pendingAssistantMessages.delete(messageId);
+            return;
+          }
+          
+          // Vérifier que le texte n'a pas changé depuis qu'on a créé le timeout
+          // (tolérance de 5 caractères pour les petits changements finaux)
+          const textDiff = Math.abs(currentText.length - text.length);
+          if (textDiff > 5) {
+            // Le texte a changé, ne pas traiter (probablement encore en streaming)
+            // Recréer le timeout avec le nouveau texte
+            const newTimeout = setTimeout(processMessage, 2000);
+            pendingAssistantMessages.set(messageId, {
+              element: messageEl,
+              text: currentText,
+              timeout: newTimeout,
+              lastUpdate: Date.now()
+            });
+            return;
+          }
+          
+          // Vérifier une dernière fois que le texte est vraiment stable
+          // Attendre encore 500ms et vérifier à nouveau
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          // Vérifier que le message n'a pas été supprimé entre-temps
+          if (!messageEl || !messageEl.isConnected) {
+            pendingAssistantMessages.delete(messageId);
+            return;
+          }
+          
+          const finalText = extractMessageText(messageEl);
+          if (!finalText || finalText !== currentText) {
+            // Le texte a encore changé, ne pas traiter
+            return;
+          }
+          
+          // Vérifier qu'on est toujours le timeout actif (pas un autre timeout qui a pris le relais)
+          const currentPending = pendingAssistantMessages.get(messageId);
+          if (!currentPending || currentPending.timeout !== timeout) {
+            // Un autre timeout a été créé, ne pas traiter
+            return;
+          }
+          
+          // Le texte est vraiment stable, on peut traiter
+          pendingAssistantMessages.delete(messageId);
+          
+          // Vérifier qu'on ne l'a pas déjà traité
+          const currentHash = generateMessageHash(messageEl, finalText);
+          if (processedMessages.has(currentHash) || processedMessagesPersistent.has(currentHash)) {
+            return; // Déjà traité
+          }
+          
+          // Traiter le message maintenant (UNE SEULE FOIS)
+          await processAssistantMessage(messageEl, finalText, currentHash);
+        };
+        
+        const timeout = setTimeout(processMessage, 2000); // Attendre 2 secondes sans changement
+        
+        // Stocker/mettre à jour le timeout
+        pendingAssistantMessages.set(messageId, {
+          element: messageEl,
+          text: text,
+          timeout: timeout,
+          lastUpdate: Date.now()
+        });
+        
+        // Ne JAMAIS traiter directement, toujours attendre le debounce
+        continue;
+      }
+      
+      // Marquer comme traité (seulement pour les messages utilisateur, les assistant sont gérés par le debounce)
+      processedMessages.add(hash);
+      await saveProcessedMessage(hash);
+      newMessagesCount++;
+      
       // Estimer les tokens
       const tokens = estimateTokens(text);
       
-      // Log détaillé pour diagnostic
-      console.log(`📝 Message ${isUser ? 'utilisateur' : 'assistant'}:`, {
-        tokens,
-        textLength: text.length,
-        words: text.trim().split(/\s+/).length,
-        preview: text.substring(0, 50) + '...'
-      });
+      // Log détaillé pour diagnostic (seulement pour les messages utilisateur)
+      if (isUser) {
+        console.log(`📝 Message utilisateur:`, {
+          tokens,
+          textLength: text.length,
+          words: text.trim().split(/\s+/).length,
+          preview: text.substring(0, 50) + '...'
+        });
+      }
       
       if (isUser) {
-        // Vérifier que c'est vraiment un message utilisateur (pas un élément de séparation)
-        // Chercher spécifiquement la classe user-message-bubble-color dans l'élément ou ses parents
-        const hasUserBubble = messageEl.querySelector('.user-message-bubble-color') !== null ||
-                              messageEl.classList.contains('user-message-bubble-color') ||
-                              messageEl.closest('.user-message-bubble-color') !== null;
-        
-        // Si on n'a pas la classe user-message-bubble-color, vérifier qu'on a vraiment du contenu
-        if (!hasUserBubble && text.trim().length < 5) {
-          console.log('⏭️ Message utilisateur ignoré (pas de bulle ou contenu insuffisant):', text.substring(0, 50));
+        // Pour ChatGPT avec data-message-author-role="user", c'est un vrai message
+        // Vérifier seulement qu'on a du contenu significatif (au moins 3 caractères)
+        if (text.trim().length < 3) {
+          console.log('⏭️ Message utilisateur ignoré (contenu insuffisant):', text.substring(0, 50));
           continue;
         }
+        
+        // RÉINITIALISER LA SESSION à chaque nouveau prompt utilisateur
+        await chrome.runtime.sendMessage({
+          type: 'RESET_SESSION_ONLY'
+        });
+        console.log('🔄 Session réinitialisée (nouveau prompt détecté)');
         
         // Stocker le prompt pour l'associer à la réponse
         await chrome.storage.local.set({ lastPrompt: { text, tokens } });
-        console.log(`💾 Prompt stocké: ${tokens} tokens`, hasUserBubble ? '(avec user-message-bubble-color)' : '');
-      } else if (isAssistant) {
-        // Vérifier d'abord si on a des données interceptées
-        const interceptedData = findInterceptedData();
-        if (interceptedData && interceptedData.responseTokens) {
-          // Utiliser les données interceptées (plus précises)
-          console.log('✅ Utilisation des données interceptées:', {
-            promptTokens: interceptedData.promptTokens,
-            responseTokens: interceptedData.responseTokens,
-            model: interceptedData.model
-          });
-          await processInterceptedData(interceptedData);
-          continue;
-        }
-        
-        // Avertir si les tokens semblent très sous-estimés
-        // Pour du code, on s'attend à ~1 token par 3-4 caractères
-        // Pour du texte normal, ~1 token par 4 caractères
-        const expectedTokensMin = Math.floor(text.length / 4);
-        const hasCode = text.includes('```') || text.includes('def ') || text.includes('import ') || 
-                       text.includes('function ') || text.includes('const ') || text.includes('class ');
-        
-        if (text.length > 500) {
-          const ratio = tokens / text.length;
-          const isUnderestimated = ratio < 0.15 && text.length > 2000; // Moins de 0.15 tokens/char pour longs textes
-          
-          if (isUnderestimated || (hasCode && tokens < expectedTokensMin * 0.5)) {
-            console.warn('⚠️ Tokens potentiellement sous-estimés:', {
-              textLength: text.length,
-              estimatedTokens: tokens,
-              expectedTokensMin: expectedTokensMin,
-              ratio: ratio.toFixed(4),
-              hasCode: hasCode,
-              suggestion: 'Les données interceptées ou l\'extraction complète ne fonctionnent peut-être pas'
-            });
-          }
-        }
-        
-        // Log détaillé pour les gros messages (avec code)
-        if (hasCode && text.length > 2000) {
-          const codeBlocks = (text.match(/```[\s\S]*?```/g) || []).length;
-          const codeLength = (text.match(/```[\s\S]*?```/g) || []).reduce((sum, block) => sum + block.length, 0);
-          console.log('📋 Message avec code détecté:', {
-            totalLength: text.length,
-            codeBlocks: codeBlocks,
-            codeLength: codeLength,
-            textLength: text.length - codeLength,
-            estimatedTokens: tokens
-          });
-        }
-        
-        // Sinon, utiliser les données DOM
+        console.log(`💾 Prompt stocké: ${tokens} tokens`);
+      }
+      // Note: Les messages assistant sont traités uniquement via le debounce (processAssistantMessage)
+      // Pas de traitement direct ici pour éviter les doublons pendant le streaming
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse d\'un message:', error);
+    }
+  }
+  
+  return newMessagesCount;
+}
+
+/**
+ * Traiter un message assistant (appelé après debounce)
+ */
+async function processAssistantMessage(messageEl, text, hash) {
+  try {
+    // Marquer comme traité
+    processedMessages.add(hash);
+    await saveProcessedMessage(hash);
+    
+    // Estimer les tokens
+    const tokens = estimateTokens(text);
+    
+    console.log(`✅ Message assistant (stabilisé après debounce):`, {
+      tokens,
+      textLength: text.length,
+      words: text.trim().split(/\s+/).length,
+      preview: text.substring(0, 50) + '...'
+    });
+    
+    // Vérifier d'abord si on a des données interceptées
+    const interceptedData = findInterceptedData();
+    if (interceptedData && interceptedData.responseTokens) {
+      // Utiliser les données interceptées (plus précises)
+      console.log('✅ Utilisation des données interceptées:', {
+        promptTokens: interceptedData.promptTokens,
+        responseTokens: interceptedData.responseTokens,
+        model: interceptedData.model
+      });
+      await processInterceptedData(interceptedData);
+      return;
+    }
+    
+    // Sinon, utiliser les données DOM
         const result = await chrome.storage.local.get(['lastPrompt']);
         const promptTokens = result.lastPrompt?.tokens || 0;
         const responseTokens = tokens;
-        
-        // Calculer les métriques supplémentaires pour améliorer la prédiction
-        const wordCount = countWords(text);
-        const readingTime = calculateReadingTime(wordCount);
-        
-        // Estimer les durées (en nanosecondes)
-        // Pour une réponse, on estime la durée totale basée sur la longueur
-        // Estimation: ~100ms par 100 tokens pour la génération
-        const estimatedTotalDuration = Math.max(100000000, responseTokens * 1000000); // Au moins 100ms
-        const estimatedResponseDuration = estimatedTotalDuration * 0.8; // 80% du temps pour la réponse
-        
-        console.log(`📊 Utilisation estimation DOM:`, {
-          promptTokens,
-          responseTokens,
-          wordCount,
-          readingTime,
-          estimatedTotalDuration,
-          estimatedResponseDuration,
-          model: detectedModel || platform.defaultModel
-        });
+    
+    // Calculer les métriques supplémentaires pour améliorer la prédiction
+    const wordCount = countWords(text);
+    const readingTime = calculateReadingTime(wordCount);
+    
+    // Estimer les durées (en nanosecondes)
+    const estimatedTotalDuration = Math.max(100000000, responseTokens * 1000000); // Au moins 100ms
+    const estimatedResponseDuration = estimatedTotalDuration * 0.8; // 80% du temps pour la réponse
+    
+    console.log(`📊 Utilisation estimation DOM:`, {
+      promptTokens,
+      responseTokens,
+      wordCount,
+      readingTime,
+      estimatedTotalDuration,
+      estimatedResponseDuration,
+      model: detectedModel || platform.defaultModel
+    });
         
         // Envoyer au background pour calcul
         await chrome.runtime.sendMessage({
           type: 'NEW_EXCHANGE',
           data: {
             platform: platform.name,
-            model: detectedModel || platform.defaultModel,
+        model: detectedModel || platform.defaultModel,
             promptTokens,
             responseTokens,
-            totalDuration: estimatedTotalDuration,
-            responseDuration: estimatedResponseDuration,
-            wordCount: wordCount,
-            readingTime: readingTime,
+        totalDuration: estimatedTotalDuration,
+        responseDuration: estimatedResponseDuration,
+        wordCount: wordCount,
+        readingTime: readingTime,
             timestamp: Date.now()
           }
         });
-      }
     } catch (error) {
-      console.error('Erreur lors de l\'analyse d\'un message:', error);
-    }
+    console.error('Erreur lors du traitement du message assistant:', error);
   }
 }
 
@@ -1185,9 +1509,15 @@ function isUserMessage(element) {
     if (role === 'user') {
       // Vérifier aussi qu'on a un vrai message utilisateur (pas juste un élément vide)
       // Chercher spécifiquement la classe user-message-bubble-color ou un contenu significatif
-      const hasUserBubble = element.querySelector('.user-message-bubble-color') !== null ||
-                            element.classList.contains('user-message-bubble-color') ||
-                            element.closest('.user-message-bubble-color') !== null;
+      let hasUserBubble = element.querySelector('.user-message-bubble-color') !== null ||
+                            element.classList.contains('user-message-bubble-color');
+      if (!hasUserBubble && element instanceof Element && typeof element.closest === 'function') {
+        try {
+          hasUserBubble = element.closest('.user-message-bubble-color') !== null;
+        } catch (error) {
+          console.warn('Erreur lors de l\'appel à closest() dans isUserMessage:', error, element);
+        }
+      }
       
       const text = element.innerText || element.textContent || '';
       const hasContent = text.trim().length >= 5; // Au moins 5 caractères
@@ -1208,9 +1538,15 @@ function isUserMessage(element) {
   }
   
   // Vérifier si l'élément ou un parent a la classe user-message-bubble-color
-  const hasUserBubble = element.querySelector('.user-message-bubble-color') !== null ||
-                        element.classList.contains('user-message-bubble-color') ||
-                        element.closest('.user-message-bubble-color') !== null;
+  let hasUserBubble = element.querySelector('.user-message-bubble-color') !== null ||
+                        element.classList.contains('user-message-bubble-color');
+  if (!hasUserBubble && element instanceof Element && typeof element.closest === 'function') {
+    try {
+      hasUserBubble = element.closest('.user-message-bubble-color') !== null;
+    } catch (error) {
+      console.warn('Erreur lors de l\'appel à closest() dans isUserMessage (2):', error, element);
+    }
+  }
   
   if (hasUserBubble) {
     return true;
@@ -1309,7 +1645,17 @@ function extractMessageText(element) {
     // Si l'élément est un sous-élément d'un message (comme <p data-start="..." data-end="...">)
     // mais n'a pas lui-même data-message-author-role, chercher le conteneur parent
     if (platform && platform.name === 'ChatGPT' && !element.hasAttribute('data-message-author-role')) {
-      const messageContainer = element.closest('[data-message-author-role]');
+      // Vérifier que element est un Element et que closest est disponible
+      if (!(element instanceof Element) || typeof element.closest !== 'function') {
+        return text;
+      }
+      let messageContainer = null;
+      try {
+        messageContainer = element.closest('[data-message-author-role]');
+      } catch (error) {
+        console.warn('Erreur lors de l\'appel à closest() pour messageContainer dans extractMessageText:', error, element);
+        return text;
+      }
       if (messageContainer) {
         // Utiliser innerText du conteneur parent pour capturer tout le contenu
         const text = messageContainer.innerText || messageContainer.textContent || '';
@@ -1620,7 +1966,7 @@ window.addEventListener('beforeunload', () => {
   // Nettoyer les caches en mémoire
   interceptedDataCache.clear();
   processedMessages.clear(); // Ne pas vider processedMessagesPersistent (persistant)
-  streamingMessages.clear();
+  pendingAssistantMessages.clear();
   
   // Note: La réinitialisation de la session se fait dans init() au prochain chargement
   // pour être sûr que ça fonctionne
@@ -1670,7 +2016,7 @@ async function checkUrlChange() {
     lastUrl = currentUrl;
     lastMessageCount = 0;
     processedMessages.clear();
-    streamingMessages.clear();
+    pendingAssistantMessages.clear();
     interceptedDataCache.clear();
     conversationId = generateConversationId();
     
