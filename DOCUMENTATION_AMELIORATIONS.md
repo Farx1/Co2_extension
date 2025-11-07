@@ -20,7 +20,7 @@ Ce document présente les fonctionnalités avancées implémentées dans Track S
 
 **Fonctionnalité** : Intercepte les requêtes réseau (`fetch` et `XMLHttpRequest`) pour récupérer les **vraies données** depuis les APIs des plateformes :
 
-- ✅ **Modèle réel utilisé** (gpt-4, claude-3.5-sonnet, etc.)
+- ✅ **Modèle réel utilisé** (gpt-4o, gpt-4, gpt-3.5-turbo)
 - ✅ **Tokens exacts** (prompt_tokens, completion_tokens)
 - ✅ **Contenu des messages** (pour validation)
 
@@ -31,10 +31,9 @@ Ce document présente les fonctionnalités avancées implémentées dans Track S
 
 **Implémentation** :
 - Injection du script dans la page via `content.js`
-- Interception des endpoints API :
-  - ChatGPT : `/api/conversation`, `/backend-api/conversation`
-  - Claude : `api.anthropic.com/v1/messages`
-  - Gemini : `generativelanguage.googleapis.com/v1beta/models`
+- Interception des endpoints API ChatGPT :
+  - `/api/conversation`, `/backend-api/conversation`
+  - `/backend-api/chat`, `/api/chat`
 
 #### Amélioration de la Détection DOM
 
@@ -106,7 +105,7 @@ Ce document présente les fonctionnalités avancées implémentées dans Track S
 **Fonctionnalités** :
 - ✅ Structure pour intégrer tiktoken
 - ✅ Fallback intelligent sur l'estimation actuelle
-- ✅ Support multi-modèles (GPT-4, GPT-3.5, Claude, etc.)
+- ✅ Support multi-modèles OpenAI (GPT-4o, GPT-4, GPT-3.5 Turbo)
 - ✅ Cache des tokenizers pour performance
 
 ### Avantages

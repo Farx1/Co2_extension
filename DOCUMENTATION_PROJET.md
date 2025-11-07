@@ -20,7 +20,7 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) des requêt
 ### Résultats clés
 
 #### Modèle ML
-- **Performance** : R² = 0.984 (98.4% de variance expliquée)
+- **Performance** : R² = 0.8704 (87.04% de variance expliquée)
 - **Algorithme** : Gradient Boosting
 - **Dataset** : 78,728 mesures réelles de consommation énergétique
 - **Features principales** : Longueur de réponse (47%), Total tokens (26%), Taille du modèle (20%)
@@ -57,9 +57,9 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) des requêt
 ### Objectifs atteints
 
 ✅ Analyse complète du dataset LLM energy consumption (78,728 mesures)
-✅ Construction d'un modèle prédictif performant (R² = 0.984)
+✅ Construction d'un modèle prédictif performant (R² = 0.8704)
 ✅ Développement d'une extension Chrome fonctionnelle
-✅ Détection automatique de ChatGPT, Claude et Gemini
+✅ Détection automatique de ChatGPT (GPT-4o testé et validé)
 ✅ Système de conversion CO₂ avec 30+ pays
 ✅ Interface utilisateur intuitive et responsive
 ✅ Documentation complète
@@ -71,9 +71,8 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) des requêt
 
 | Métrique | Valeur |
 |----------|--------|
-| R² Score | 0.9841 |
-| MAE | 0.000014 J |
-| MSE | 5.01e-09 J² |
+| R² Score | 0.8704 |
+| MSE | 0.002 J |
 | Algorithme | Gradient Boosting |
 | Features | 7 |
 | Samples (train) | 62,982 |
@@ -111,7 +110,7 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) des requêt
 #### 2. Construire un modèle prédictif estimant l'énergie par token/requête
 
 **Statut** : ✅ **COMPLET**
-- Modèle Gradient Boosting avec R² = 0.984
+- Modèle Gradient Boosting avec R² = 0.8704
 - Performance supérieure aux attentes
 - Export en JavaScript pour l'extension
 
@@ -127,18 +126,18 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) des requêt
 **Statut** : ✅ **COMPLET**
 - Extension Chrome fonctionnelle
 - Interface moderne et intuitive
-- Détection automatique ChatGPT, Claude, Gemini
+- Détection automatique ChatGPT (GPT-4o testé et validé)
 - Dashboard complet avec graphiques
 
 ### Points Forts
 
-1. **Modèle ML performant** : R² = 0.984 (excellent)
+1. **Modèle ML performant** : R² = 0.8704 (excellent)
 2. **Dataset complet** : 78,728 mesures (vs 5,200 demandées)
 3. **Interface utilisateur** : Moderne, intuitive, responsive
 4. **Documentation** : Complète et détaillée
 5. **Intégration Watsonx** : Prédictions avancées avec modèle déployé
 6. **Précision des tokens** : Interception réseau pour données API réelles
-7. **Interception réseau** : Support multi-plateformes (ChatGPT, Claude, Gemini)
+7. **Interception réseau** : Support ChatGPT avec détection automatique du modèle
 8. **Performance** : Chargement optimisé des données
 9. **Robustesse** : Système de déduplication et gestion robuste des cas limites
 
@@ -148,7 +147,7 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) des requêt
 
 ### Objectif
 
-Améliorer la capacité de l'extension à scanner et analyser les messages des LLM (ChatGPT, Claude, Gemini) pour calculer précisément le facteur de CO2 généré par les prompts.
+Améliorer la capacité de l'extension à scanner et analyser les messages de ChatGPT pour calculer précisément le facteur de CO2 généré par les prompts.
 
 ### Modifications Réalisées
 
@@ -158,7 +157,7 @@ Améliorer la capacité de l'extension à scanner et analyser les messages des L
 
 **Fonctionnalité** : Intercepte les requêtes réseau (`fetch` et `XMLHttpRequest`) pour récupérer les **vraies données** depuis les APIs des plateformes :
 
-- ✅ **Modèle réel utilisé** (gpt-4, claude-3.5-sonnet, etc.)
+- ✅ **Modèle réel utilisé** (gpt-4o, gpt-4, gpt-3.5-turbo)
 - ✅ **Tokens exacts** (prompt_tokens, completion_tokens)
 - ✅ **Contenu des messages** (pour validation)
 

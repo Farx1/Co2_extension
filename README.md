@@ -4,29 +4,28 @@ Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) de vos requ
 
 ## 📋 Description
 
-Track Sustainability analyse en temps réel vos conversations avec ChatGPT, Claude, Gemini et autres LLMs pour estimer la consommation énergétique et les émissions de CO₂ associées. L'extension utilise un modèle de machine learning entraîné sur des données réelles de consommation énergétique de modèles open-source, avec intégration Watsonx pour des prédictions avancées.
+Track Sustainability analyse en temps réel vos conversations avec ChatGPT pour estimer la consommation énergétique et les émissions de CO₂ associées. L'extension utilise un modèle de machine learning entraîné sur des données réelles de consommation énergétique de modèles open-source, avec intégration Watsonx pour des prédictions avancées.
 
 ### ✨ Fonctionnalités
 
-- **Détection automatique** des conversations sur ChatGPT, Claude, Gemini
-- **Estimation précise** de la consommation énergétique basée sur un modèle ML (R² = 0.874)
+- **Détection automatique** des conversations sur ChatGPT
+- **Estimation précise** de la consommation énergétique basée sur un modèle ML (R² = 0.8704)
 - **Intégration Watsonx** pour des prédictions avec modèle déployé
 - **Conversion en CO₂** avec choix du mix énergétique par pays (30+ pays disponibles)
-- **Tracking cumulatif** de toutes vos conversations
+- **Tracking cumulatif** des statistiques de toutes vos conversations
 - **Dashboard complet** avec graphiques, prédictions long terme et comparaisons
 - **Équivalences concrètes** (km en voiture, emails, arbres nécessaires)
 - **Interface intuitive** avec statistiques en temps réel
 
 ### 🎯 Modèles supportés
 
-L'extension reconnaît automatiquement les modèles suivants :
+L'extension détecte automatiquement les modèles OpenAI utilisés sur ChatGPT :
 
-- **OpenAI** : GPT-4, GPT-4 Turbo, GPT-4o, GPT-3.5 Turbo
-- **Anthropic** : Claude 3 Opus, Claude 3.5 Sonnet, Claude 3 Haiku
-- **Google** : Gemini Pro, Gemini 1.5 Pro, Gemini 1.5 Flash
-- **Meta** : LLaMA 2, LLaMA 3 (7B, 8B, 70B)
-- **Mistral** : Mistral 7B, Mixtral 8x7B
-- **Autres** : CodeLlama, et plus...
+- **GPT-4o** (testé et validé)
+- **GPT-4** / **GPT-4 Turbo**
+- **GPT-3.5 Turbo**
+
+Les estimations d'énergie sont basées sur un modèle ML entraîné sur des données réelles de consommation énergétique, permettant d'estimer l'impact même pour les modèles propriétaires comme GPT-4o.
 
 ## 🚀 Installation
 
@@ -92,8 +91,8 @@ Puis charger le fichier .zip dans Chrome.
 
 ## 📊 Utilisation
 
-1. **Ouvrir une plateforme LLM**
-   - Aller sur chat.openai.com, claude.ai ou gemini.google.com
+1. **Ouvrir ChatGPT**
+   - Aller sur chat.openai.com
 
 2. **Commencer une conversation**
    - L'extension détecte automatiquement vos échanges
@@ -123,7 +122,9 @@ L'extension utilise plusieurs méthodes de prédiction :
 Le modèle est entraîné sur le dataset [LLM Inference Energy Consumption](https://huggingface.co/datasets/ejhusom/llm-inference-energy-consumption) :
 - **78,728 mesures** réelles de consommation énergétique
 - **15 configurations** (modèles × hardware)
-- **Performance** : R² = 0.984, MAE = 0.000014 J
+- **Performance** : R² = 0.8704, MSE = 0.002 J
+
+**Note** : Les estimations sont basées sur des modèles open-source similaires. Pour GPT-4o, l'extension utilise des coefficients adaptés pour estimer la consommation énergétique.
 
 ### Formule de calcul
 
@@ -234,7 +235,7 @@ Ce projet a été développé par :
 
 <div align="center">
 
-**🌱 Track Sustainability Team**
+**🌱 Track Sustainability Team 23**
 
 | 👨‍💻 | 👨‍💻 | 👨‍💻 | 👨‍💻 | 👩‍💻 |
 |:---:|:---:|:---:|:---:|:---:|
