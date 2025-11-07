@@ -7,8 +7,6 @@
   <script src="chart.umd.min.js"></script>
   <!-- Charger init-scripts.js qui chargera les autres scripts via chrome.runtime.getURL() -->
   <script src="init-scripts.js"></script>
-  <!-- Charger les améliorations du dashboard -->
-  <script src="dashboard-enhancements.js"></script>
   <style>
     * {
       margin: 0;
@@ -153,6 +151,13 @@
       font-size: 14px;
       opacity: 0.8;
       margin-left: 5px;
+    }
+    
+    .stat-subtitle {
+      font-size: 12px;
+      opacity: 0.85;
+      margin-top: 8px;
+      font-weight: 400;
     }
 
     .chart-container {
@@ -307,21 +312,67 @@
           <div class="stat-card">
             <h3>Total Échanges</h3>
             <div class="value" id="total-measures">-</div>
+            <div class="stat-subtitle" id="total-measures-subtitle"></div>
           </div>
           <div class="stat-card">
             <h3>Énergie Totale</h3>
             <div class="value" id="total-energy">-</div>
             <span class="unit">kWh</span>
+            <div class="stat-subtitle" id="total-energy-subtitle"></div>
           </div>
           <div class="stat-card">
             <h3>CO₂ Émis (Total)</h3>
             <div class="value" id="total-co2">-</div>
             <span class="unit">kg</span>
+            <div class="stat-subtitle" id="total-co2-subtitle"></div>
           </div>
           <div class="stat-card">
             <h3>Prédiction Annuelle</h3>
             <div class="value" id="annual-prediction-energy">-</div>
             <span class="unit">kWh/an</span>
+            <div class="stat-subtitle" id="annual-prediction-subtitle"></div>
+          </div>
+        </div>
+        
+        <!-- Statistiques détaillées -->
+        <div class="stats-grid" style="margin-top: 20px;">
+          <div class="stat-card" style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);">
+            <h3>Consommation Mensuelle</h3>
+            <div class="value" id="monthly-energy">-</div>
+            <span class="unit">kWh/mois</span>
+            <div class="stat-subtitle" id="monthly-energy-subtitle"></div>
+          </div>
+          <div class="stat-card" style="background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
+            <h3>Total Tokens</h3>
+            <div class="value" id="total-tokens">-</div>
+            <div class="stat-subtitle" id="total-tokens-subtitle"></div>
+          </div>
+          <div class="stat-card" style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%);">
+            <h3>Énergie Moyenne/Échange</h3>
+            <div class="value" id="avg-energy-per-exchange">-</div>
+            <span class="unit">kWh</span>
+            <div class="stat-subtitle" id="avg-energy-subtitle"></div>
+          </div>
+          <div class="stat-card" style="background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%);">
+            <h3>Période de Collecte</h3>
+            <div class="value" id="collection-period">-</div>
+            <span class="unit">jours</span>
+            <div class="stat-subtitle" id="collection-period-subtitle"></div>
+          </div>
+        </div>
+        
+        <!-- Statistiques par plateforme et modèle -->
+        <div class="chart-container" style="margin-top: 30px;">
+          <h2>📊 Répartition par Plateforme</h2>
+          <div id="platform-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 20px;">
+            <!-- Stats dynamiques -->
+          </div>
+        </div>
+        
+        <div class="chart-container" style="margin-top: 30px;">
+          <h2>🤖 Répartition par Modèle</h2>
+          <div id="model-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 20px;">
+            <!-- Stats dynamiques -->
           </div>
         </div>
 
@@ -334,9 +385,23 @@
         </div>
 
         <div class="chart-container">
-          <h2>Évolution de la Consommation</h2>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0;">Évolution de la Consommation</h2>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <label for="scenario-select" style="font-size: 14px; font-weight: 500;">Scénario de projet:</label>
+              <select id="scenario-select" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; background: white; cursor: pointer;">
+                <option value="conservative">📉 Projet Modéré</option>
+                <option value="normal" selected>📊 Projet Normal</option>
+                <option value="intensive">📈 Projet Intensif</option>
+              </select>
+            </div>
+          </div>
           <div class="chart-wrapper">
             <canvas id="chart-consumption-trend"></canvas>
+          </div>
+          <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 6px; font-size: 12px; color: #666;">
+            <strong>ℹ️ Note:</strong> Les prédictions sont basées sur vos données historiques avec une simulation de trajectoires semi-aléatoires. 
+            La zone ombrée représente l'intervalle de confiance à 80%. Les prédictions sont indicatives et peuvent varier selon votre utilisation réelle.
           </div>
         </div>
 

@@ -90,6 +90,16 @@
         dashboardScript.src = chrome.runtime.getURL('dashboard.js');
         dashboardScript.onload = () => {
           console.log('✓ dashboard.js chargé');
+          // Charger dashboard-enhancements.js après dashboard.js
+          const enhancementsScript = document.createElement('script');
+          enhancementsScript.src = chrome.runtime.getURL('dashboard-enhancements.js');
+          enhancementsScript.onload = () => {
+            console.log('✓ dashboard-enhancements.js chargé');
+          };
+          enhancementsScript.onerror = (error) => {
+            console.error('❌ Erreur chargement dashboard-enhancements.js:', error);
+          };
+          document.head.appendChild(enhancementsScript);
         };
         dashboardScript.onerror = (error) => {
           console.error('❌ Erreur chargement dashboard.js:', error);
@@ -106,6 +116,12 @@
       watsonxServiceScript.onload = () => {
         const dashboardScript = document.createElement('script');
         dashboardScript.src = chrome.runtime.getURL('dashboard.js');
+        dashboardScript.onload = () => {
+          // Charger dashboard-enhancements.js après dashboard.js
+          const enhancementsScript = document.createElement('script');
+          enhancementsScript.src = chrome.runtime.getURL('dashboard-enhancements.js');
+          document.head.appendChild(enhancementsScript);
+        };
         document.head.appendChild(dashboardScript);
       };
       document.head.appendChild(watsonxServiceScript);
@@ -116,6 +132,11 @@
     // Charger dashboard.js quand même
     const dashboardScript = document.createElement('script');
     dashboardScript.src = 'dashboard.js';
+    dashboardScript.onload = () => {
+      const enhancementsScript = document.createElement('script');
+      enhancementsScript.src = 'dashboard-enhancements.js';
+      document.head.appendChild(enhancementsScript);
+    };
     document.head.appendChild(dashboardScript);
   }
 })();

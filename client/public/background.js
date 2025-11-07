@@ -329,17 +329,27 @@ async function predictEnergyWithWatsonx(params) {
     
     // Endpoints (publics en premier, éviter les endpoints privés depuis le service worker)
     // Note: Les endpoints privés peuvent ne pas être accessibles depuis le service worker à cause de CORS
+    // Le paramètre version est REQUIS pour l'API Watson ML
     const projectIdParam = config.projectId ? `project_id=${encodeURIComponent(config.projectId)}` : '';
-    const endpoints = [
-      // Essayer d'abord avec version et project_id
-      `${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions?version=2021-05-01${projectIdParam ? '&' + projectIdParam : ''}`,
-      // Sans version mais avec project_id
-      `${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions${projectIdParam ? '?' + projectIdParam : ''}`,
-      // Avec version seulement (project_id dans headers)
-      `${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions?version=2021-05-01`,
-      // Sans version ni project_id (project_id dans headers)
-      `${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions`
-    ];
+    const versionParam = 'version=2021-05-01';
+    
+    // Construire les URLs avec le paramètre version TOUJOURS présent
+    const endpoints = [];
+    
+    // 1. Avec version ET project_id dans l'URL
+    if (projectIdParam) {
+      endpoints.push(`${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions?${versionParam}&${projectIdParam}`);
+    }
+    
+    // 2. Avec version seulement (project_id dans headers)
+    endpoints.push(`${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions?${versionParam}`);
+    
+    // 3. Essayer avec version dans l'URL et project_id dans headers (fallback)
+    if (projectIdParam) {
+      endpoints.push(`${baseUrl}/ml/v4/deployments/${config.deploymentId}/predictions?${versionParam}`);
+    }
+    
+    console.log('🔗 Endpoints Watsonx à essayer:', endpoints);
     
     // Préparer le payload
     const inputFields = [
@@ -836,6 +846,14 @@ async function resetCurrentSession() {
  * Réinitialiser toutes les statistiques (session + total cumulé)
  */
 async function resetAllStats() {
+  // Réinitialiser aussi les messages traités pour permettre un re-scan complet
+  const result = await chrome.storage.local.get(['processedMessagesMap']);
+  const processedMessagesMap = result.processedMessagesMap || {};
+  
+  // Option 1: Réinitialiser complètement (recommandé après une réinitialisation complète)
+  // Option 2: Garder les messages traités mais permettre le re-scan via forceRescan
+  // On choisit l'option 1 pour être cohérent avec la réinitialisation complète
+  
   await chrome.storage.local.set({
     currentSession: {
       requests: 0,
@@ -849,9 +867,14 @@ async function resetAllStats() {
       tokens: 0,
       co2Grams: 0
     },
-    conversationHistory: []
+    conversationHistory: [],
+    lastExchange: null,
+    processedMessagesMap: {}, // Réinitialiser aussi les messages traités
+    // Enregistrer le timestamp de réinitialisation pour que le popup puisse détecter
+    // et forcer le re-scan des messages lors du prochain scan manuel
+    dataResetTimestamp: Date.now()
   });
-  console.log('✓ Toutes les statistiques réinitialisées');
+  console.log('✓ Toutes les statistiques réinitialisées (y compris messages traités)');
 }
 
 // Écouter les messages

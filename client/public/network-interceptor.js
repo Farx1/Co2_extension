@@ -438,8 +438,35 @@
    */
   const originalFetch = window.fetch;
   window.fetch = async function(...args) {
-    const url = args[0];
-    const options = args[1] || {};
+    // Extraire l'URL de manière sécurisée
+    let url = args[0];
+    let options = args[1] || {};
+    
+    // Si url est un Request object, extraire l'URL et les options
+    if (url instanceof Request) {
+      const requestObj = url;
+      url = requestObj.url;
+      // Si options n'est pas fourni explicitement, utiliser les options du Request
+      if (!args[1]) {
+        options = {
+          method: requestObj.method || 'GET',
+          headers: requestObj.headers,
+          body: requestObj.body,
+          mode: requestObj.mode,
+          credentials: requestObj.credentials,
+          cache: requestObj.cache,
+          redirect: requestObj.redirect,
+          referrer: requestObj.referrer,
+          integrity: requestObj.integrity
+        };
+      }
+    }
+    
+    // Vérifier que url est une string avant d'appeler includes()
+    if (typeof url !== 'string' || !url) {
+      // Si ce n'est pas une string valide, passer directement à l'original fetch
+      return originalFetch.apply(this, args);
+    }
     
     // Intercepter seulement les URLs pertinentes
     const platform = getPlatform();
@@ -545,15 +572,25 @@
   const originalXHRSend = XMLHttpRequest.prototype.send;
   
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    this._ts_url = url;
+    // Vérifier que url est une string
+    if (typeof url === 'string') {
+      this._ts_url = url;
+    } else {
+      this._ts_url = null;
+    }
     this._ts_method = method;
     return originalXHROpen.apply(this, [method, url, ...rest]);
   };
-  
+
   XMLHttpRequest.prototype.send = function(body) {
     const url = this._ts_url;
     const method = this._ts_method;
     const platform = getPlatform();
+    
+    // Vérifier que url est une string valide avant d'appeler includes()
+    if (!url || typeof url !== 'string') {
+      return originalXHRSend.apply(this, [body]);
+    }
     
     // URLs pertinentes pour ChatGPT (exclure /resume et autres endpoints non-pertinents)
     const isXHRRelevant = 

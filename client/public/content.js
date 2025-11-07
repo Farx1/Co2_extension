@@ -446,6 +446,104 @@ async function saveProcessedMessage(hash) {
 let checkMessagesTimeout = null;
 
 /**
+ * Helper function pour trouver un parent correspondant à un sélecteur (remplace closest)
+ */
+function findParentMatching(element, selector) {
+  // Protection: vérifier que element est un Element valide
+  if (!element) {
+    return null;
+  }
+  
+  // Si element n'est pas un Element, essayer de trouver le parent Element
+  let currentElement = element;
+  if (!(currentElement instanceof Element)) {
+    if (currentElement && currentElement.nodeType && currentElement.parentNode) {
+      let parent = currentElement.parentNode;
+      while (parent && parent.nodeType !== Node.ELEMENT_NODE) {
+        parent = parent.parentNode;
+      }
+      if (parent instanceof Element) {
+        currentElement = parent;
+      } else {
+        return null;
+      }
+    } else {
+      return null;
+    }
+  }
+  
+  // Si c'est un sélecteur simple comme 'textarea', 'input'
+  if (selector === 'textarea' || selector === 'input') {
+    let current = currentElement;
+    while (current) {
+      if (current.tagName === selector.toUpperCase()) {
+        return current;
+      }
+      current = current.parentElement;
+      if (!current || current === document.body) break;
+    }
+    return null;
+  }
+  
+  // Si c'est un sélecteur d'attribut comme '[data-message-author-role="assistant"]' ou 'div[data-message-author-role="assistant"]'
+  if (selector.includes('[data-message-author-role')) {
+    const match = selector.match(/\[data-message-author-role="?(\w+)"?\]/);
+    const tagMatch = selector.match(/^(\w+)\[/);
+    const tagName = tagMatch ? tagMatch[1].toUpperCase() : null;
+    
+    if (match) {
+      const role = match[1];
+      let current = currentElement;
+      while (current) {
+        // Si un tagName est spécifié (ex: 'div'), vérifier qu'on est sur le bon tag
+        if ((!tagName || current.tagName === tagName) &&
+            current.hasAttribute('data-message-author-role') && 
+            current.getAttribute('data-message-author-role') === role) {
+          return current;
+        }
+        current = current.parentElement;
+        if (!current || current === document.body) break;
+      }
+    }
+    return null;
+  }
+  
+  // Si c'est un sélecteur d'attribut simple comme '[contenteditable="true"]'
+  if (selector.includes('[contenteditable')) {
+    let current = currentElement;
+    while (current) {
+      if (current.hasAttribute('contenteditable') && 
+          current.getAttribute('contenteditable') === 'true') {
+        return current;
+      }
+      current = current.parentElement;
+      if (!current || current === document.body) break;
+    }
+    return null;
+  }
+  
+  // Si c'est un sélecteur de role comme '[role="textbox"]'
+  if (selector.includes('[role=')) {
+    const match = selector.match(/\[role="?(\w+)"?\]/);
+    if (match) {
+      const role = match[1];
+      let current = currentElement;
+      while (current) {
+        if (current.hasAttribute('role') && 
+            current.getAttribute('role') === role) {
+          return current;
+        }
+        current = current.parentElement;
+        if (!current || current === document.body) break;
+      }
+    }
+    return null;
+  }
+  
+  return null;
+}
+
+/**
  * Observer les nouveaux messages
  */
 function observeMessages() {
@@ -455,17 +553,26 @@ function observeMessages() {
     const hasRelevantChanges = mutations.some(mutation => {
       const target = mutation.target;
       
+      // Protection: ignorer si target n'existe pas ou n'a pas les propriétés attendues
+      if (!target) {
+        return false;
+      }
+      
       // Obtenir l'élément cible (si target n'est pas un Element, essayer de trouver un parent Element)
       let targetElement = null;
       if (target instanceof Element) {
         targetElement = target;
-      } else if (target && target.nodeType) {
+      } else if (target.nodeType !== undefined) {
         // C'est un Text node, Comment, ou autre type de node - chercher le parent Element
         let currentNode = target.parentNode;
-        while (currentNode && !(currentNode instanceof Element)) {
+        let depth = 0;
+        while (currentNode && currentNode.nodeType !== Node.ELEMENT_NODE && depth < 10) {
           currentNode = currentNode.parentNode;
+          depth++;
         }
-        targetElement = currentNode instanceof Element ? currentNode : null;
+        if (currentNode instanceof Element) {
+          targetElement = currentNode;
+        }
       }
       
       // Si on n'a pas d'élément valide, ignorer cette mutation
@@ -473,29 +580,29 @@ function observeMessages() {
         return false;
       }
       
-      // Vérifier que closest est une fonction avant de l'utiliser
-      if (typeof targetElement.closest !== 'function') {
+      // IGNORER: Les changements dans les zones de saisie, textarea, input
+      if (targetElement.tagName === 'TEXTAREA' || targetElement.tagName === 'INPUT') {
         return false;
       }
       
-      // IGNORER: Les changements dans les zones de saisie, textarea, input
-      try {
-        if (targetElement.tagName === 'TEXTAREA' || targetElement.tagName === 'INPUT' || 
-            targetElement.closest('textarea') || targetElement.closest('input') ||
-            (targetElement.closest('[contenteditable="true"]') && targetElement.closest('[role="textbox"]'))) {
-          return false;
-        }
-        
-        // IGNORER: Tous les changements dans les conteneurs de messages assistant
-        // ChatGPT écrit ses réponses dans ces éléments, on ne veut pas déclencher d'analyse pendant l'écriture
-        const assistantContainer = targetElement.closest('div[data-message-author-role="assistant"]');
-        if (assistantContainer) {
-          // C'est un changement dans un message assistant - IGNORER
-          return false;
-        }
-      } catch (error) {
-        // Si closest() échoue pour une raison quelconque, ignorer cette mutation
-        console.warn('Erreur lors de l\'appel à closest():', error, targetElement);
+      // Vérifier si l'élément ou un parent est un textarea/input
+      if (findParentMatching(targetElement, 'textarea') || 
+          findParentMatching(targetElement, 'input')) {
+        return false;
+      }
+      
+      // Vérifier si l'élément ou un parent a contenteditable="true" et role="textbox"
+      const contentEditable = findParentMatching(targetElement, '[contenteditable="true"]');
+      const textbox = findParentMatching(targetElement, '[role="textbox"]');
+      if (contentEditable && textbox) {
+        return false;
+      }
+      
+      // IGNORER: Tous les changements dans les conteneurs de messages assistant
+      // ChatGPT écrit ses réponses dans ces éléments, on ne veut pas déclencher d'analyse pendant l'écriture
+      const assistantContainer = findParentMatching(targetElement, 'div[data-message-author-role="assistant"]');
+      if (assistantContainer) {
+        // C'est un changement dans un message assistant - IGNORER
         return false;
       }
       
@@ -1070,6 +1177,11 @@ function findMessages() {
             return true;
           }
           
+          // Vérifier que node est un Element valide
+          if (!(node instanceof Element)) {
+            return false;
+          }
+          
           // Ignorer les éléments <hr> et autres éléments de séparation (sauf s'ils sont dans un message)
           if (node.tagName === 'HR') {
             return false;
@@ -1077,8 +1189,8 @@ function findMessages() {
           
           // Ignorer les éléments qui ne sont pas des divs (sauf exceptions)
           if (node.tagName !== 'DIV') {
-            // Vérifier que node est un Element et que closest est disponible
-            if (!(node instanceof Element) || typeof node.closest !== 'function') {
+            // Vérifier que closest est disponible
+            if (typeof node.closest !== 'function') {
               return false;
             }
             try {
@@ -1086,7 +1198,7 @@ function findMessages() {
                 return false;
               }
             } catch (error) {
-              console.warn('Erreur lors de l\'appel à closest() pour node:', error, node);
+              // Ne pas logger pour éviter le spam dans la console
               return false;
             }
           }

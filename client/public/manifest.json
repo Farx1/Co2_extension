@@ -61,7 +61,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["models/*", "data/*", "network-interceptor.js", "watsonx-service.js", "watsonx-config.js", "random-forest-predictor.js", "server-predictor.js", "init-scripts.js", "load-scripts.js", "dashboard.html", "chart.umd.min.js"],
+      "resources": ["models/*", "data/*", "network-interceptor.js", "watsonx-service.js", "watsonx-config.js", "random-forest-predictor.js", "server-predictor.js", "init-scripts.js", "load-scripts.js", "dashboard.html", "dashboard-enhancements.js", "chart.umd.min.js"],
       "matches": ["<all_urls>"]
     }
   ]

@@ -35,6 +35,39 @@ async function init() {
     // Rafraîchir les stats toutes les 2 secondes
     setInterval(loadStats, 2000);
     
+    // Écouter les changements dans le storage pour se mettre à jour automatiquement
+    // Note: Ce listener doit être déclaré au niveau global pour fonctionner même si le popup est fermé puis rouvert
+    if (!window.tsStorageListenerSetup) {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'local') {
+          // Si les stats importantes changent, recharger immédiatement
+          const hasRelevantChanges = changes.lastExchange || 
+                                     changes.totalStats || 
+                                     changes.conversationHistory ||
+                                     changes.currentSession ||
+                                     changes.dataResetTimestamp;
+          
+          if (hasRelevantChanges) {
+            console.log('📊 Changements détectés dans le storage, rafraîchissement...', Object.keys(changes));
+            
+            // Rafraîchir immédiatement
+            if (typeof loadStats === 'function') {
+              loadStats();
+              
+              // Rafraîchir aussi après un court délai pour capturer les changements en cascade
+              setTimeout(() => {
+                if (typeof loadStats === 'function') {
+                  loadStats();
+                }
+              }, 300);
+            }
+          }
+        }
+      });
+      window.tsStorageListenerSetup = true;
+      console.log('✓ Listener storage configuré');
+    }
+    
   } catch (error) {
     console.error('Erreur d\'initialisation:', error);
     document.getElementById('loading').innerHTML = '<p>❌ Erreur de chargement</p>';
@@ -73,12 +106,49 @@ async function loadStats() {
       cumulativeStats.co2Grams += exchange.co2Grams || 0;
     });
     
-    // Utiliser totalStats si disponible (plus précis)
-    const totalStats = result.totalStats || {
-      requests: cumulativeStats.requests,
-      tokens: cumulativeStats.promptTokens + cumulativeStats.responseTokens,
-      co2Grams: cumulativeStats.co2Grams
-    };
+    // Si on a un lastExchange qui n'est pas encore dans l'historique, l'inclure dans le calcul
+    // (cela peut arriver si l'échange vient d'être traité mais pas encore ajouté à l'historique)
+    if (lastExchange) {
+      // Vérifier si le lastExchange est déjà dans l'historique (par timestamp ou ID)
+      const lastExchangeInHistory = history.some(exchange => {
+        return (exchange.timestamp === lastExchange.timestamp) ||
+               (exchange.id && lastExchange.id && exchange.id === lastExchange.id) ||
+               (exchange.promptTokens === lastExchange.promptTokens && 
+                exchange.responseTokens === lastExchange.responseTokens &&
+                Math.abs((exchange.timestamp || 0) - (lastExchange.timestamp || 0)) < 1000);
+      });
+      
+      // Si le lastExchange n'est pas dans l'historique, l'ajouter au calcul
+      if (!lastExchangeInHistory) {
+        cumulativeStats.requests += 1;
+        cumulativeStats.promptTokens += lastExchange.prompt_token_length || lastExchange.promptTokens || 0;
+        cumulativeStats.responseTokens += lastExchange.response_token_length || lastExchange.responseTokens || 0;
+        cumulativeStats.energyJoules += lastExchange.energyJoules || 0;
+        cumulativeStats.co2Grams += lastExchange.co2Grams || 0;
+      }
+    }
+    
+    // Utiliser totalStats si disponible ET valide (non vide), sinon recalculer depuis l'historique
+    const storedTotalStats = result.totalStats;
+    let totalStats;
+    
+    if (storedTotalStats && 
+        (storedTotalStats.requests > 0 || storedTotalStats.tokens > 0 || storedTotalStats.co2Grams > 0)) {
+      // Utiliser totalStats si il contient des données
+      totalStats = storedTotalStats;
+    } else {
+      // Recalculer depuis l'historique (plus fiable)
+      totalStats = {
+        requests: cumulativeStats.requests,
+        tokens: cumulativeStats.promptTokens + cumulativeStats.responseTokens,
+        co2Grams: cumulativeStats.co2Grams
+      };
+      
+      // Si on a recalculé et que c'est différent, mettre à jour le storage
+      if (history.length > 0 && (totalStats.requests > 0 || totalStats.tokens > 0 || totalStats.co2Grams > 0)) {
+        chrome.storage.local.set({ totalStats });
+      }
+    }
     
     const isActive = result.isActive || false;
     
@@ -114,9 +184,13 @@ async function loadStats() {
     }
     
     // Total cumulé
-    document.getElementById('total-requests').textContent = totalStats.requests.toLocaleString();
-    document.getElementById('total-tokens').textContent = totalStats.tokens.toLocaleString();
-    document.getElementById('total-co2').textContent = formatCO2(totalStats.co2Grams);
+    const totalRequestsEl = document.getElementById('total-requests');
+    const totalTokensEl = document.getElementById('total-tokens');
+    const totalCo2El = document.getElementById('total-co2');
+    
+    if (totalRequestsEl) totalRequestsEl.textContent = (totalStats.requests || 0).toLocaleString();
+    if (totalTokensEl) totalTokensEl.textContent = (totalStats.tokens || 0).toLocaleString();
+    if (totalCo2El) totalCo2El.textContent = formatCO2(totalStats.co2Grams || 0);
     
     // Équivalence
     updateEquivalence(totalStats.co2Grams);
@@ -254,7 +328,19 @@ function setupEventListeners() {
   // Bouton scan
   const scanBtn = document.getElementById('scan-btn');
   if (scanBtn) {
-    scanBtn.addEventListener('click', async () => {
+    let lastClickTime = 0;
+    
+    scanBtn.addEventListener('click', async (e) => {
+      // Détecter le double-clic (dans les 500ms)
+      const currentTime = Date.now();
+      const timeSinceLastClick = currentTime - lastClickTime;
+      lastClickTime = currentTime;
+      
+      if (timeSinceLastClick < 500) {
+        // Double-clic détecté - forcer le re-scan
+        scanBtn.dataset.doubleClicked = 'true';
+        console.log('🔄 Double-clic détecté - force rescan activé');
+      }
       scanBtn.disabled = true;
       scanBtn.textContent = '⏳ Scan en cours...';
       
@@ -280,11 +366,61 @@ function setupEventListeners() {
           return;
         }
         
+        // Vérifier si les données ont été réinitialisées récemment
+        // Si oui, forcer le re-scan de tous les messages
+        const storageResult = await chrome.storage.local.get(['dataResetTimestamp', 'conversationHistory', 'lastExchange']);
+        const dataResetTimestamp = storageResult.dataResetTimestamp || 0;
+        const history = storageResult.conversationHistory || [];
+        const lastExchange = storageResult.lastExchange;
+        const now = Date.now();
+        
+        // Forcer le re-scan si :
+        // 1. Les données ont été réinitialisées dans les 10 dernières minutes (augmenté pour être plus permissif)
+        // 2. L'historique est vide
+        // 3. Il n'y a pas de dernier échange (données réinitialisées)
+        // 4. Le bouton a été double-cliqué (détection via un attribut data)
+        // 5. Le totalStats est vide ou à 0 alors que l'historique contient des données (incohérence)
+        const wasDoubleClicked = scanBtn.dataset.doubleClicked === 'true';
+        const totalStatsCheck = await chrome.storage.local.get(['totalStats']);
+        const totalStatsEmpty = !totalStatsCheck.totalStats || 
+                                (totalStatsCheck.totalStats.requests === 0 && 
+                                 totalStatsCheck.totalStats.tokens === 0 && 
+                                 totalStatsCheck.totalStats.co2Grams === 0);
+        const hasHistoryButNoStats = history.length > 0 && totalStatsEmpty;
+        
+        // Toujours forcer le re-scan si :
+        // 1. Double-clic explicite
+        // 2. Réinitialisation récente (< 10 min)
+        // 3. Pas de données (historique vide OU pas de lastExchange)
+        // 4. Incohérence (historique mais pas de stats)
+        // 5. Le totalStats est à 0 alors qu'on a un lastExchange (données réinitialisées mais lastExchange pas encore nettoyé)
+        const hasLastExchangeButNoStats = lastExchange && totalStatsEmpty;
+        
+        const forceRescan = wasDoubleClicked ||
+                           (now - dataResetTimestamp < 10 * 60 * 1000) || 
+                           history.length === 0 || 
+                           !lastExchange ||
+                           hasHistoryButNoStats ||
+                           hasLastExchangeButNoStats;
+        
+        // Réinitialiser le flag de double-clic
+        if (wasDoubleClicked) {
+          delete scanBtn.dataset.doubleClicked;
+        }
+        
+        if (forceRescan) {
+          console.log('🔄 Force rescan activé - tous les messages seront re-traités');
+          scanBtn.textContent = '⏳ Scan forcé en cours...';
+        } else {
+          console.log('ℹ️ Scan normal (messages déjà traités seront ignorés). Double-cliquez pour forcer le re-scan.');
+        }
+        
         // Essayer d'envoyer le message directement
         // Ne pas injecter manuellement car le manifest injecte déjà le script automatiquement
         // Si ça échoue, c'est que la page n'est pas supportée ou pas chargée
         const response = await chrome.tabs.sendMessage(tab.id, {
-          type: 'SCAN_CONVERSATION'
+          type: 'SCAN_CONVERSATION',
+          forceRescan: forceRescan
         });
         
         if (response && response.success) {
@@ -294,12 +430,29 @@ function setupEventListeners() {
           } else {
             scanBtn.textContent = '✅ Scan terminé';
           }
-          // Recharger les stats après un court délai
+          
+          // Recharger les stats immédiatement puis plusieurs fois pour s'assurer que tout est à jour
+          // (le traitement des messages peut prendre un peu de temps)
+          await loadStats(); // Premier rafraîchissement immédiat
+          
+          // Rafraîchir plusieurs fois pour capturer tous les changements
           setTimeout(async () => {
             await loadStats();
+          }, 300);
+          
+          setTimeout(async () => {
+            await loadStats();
+          }, 800);
+          
+          setTimeout(async () => {
+            await loadStats();
+          }, 1500);
+          
+          setTimeout(async () => {
+            await loadStats(); // Dernier rafraîchissement
             scanBtn.disabled = false;
             scanBtn.textContent = '🔍 Scanner la conversation actuelle';
-          }, 2000);
+          }, 2500);
         } else {
           alert('⚠️ ' + (response?.error || 'Impossible de scanner la conversation. Assurez-vous d\'être sur ChatGPT, Claude ou Gemini.'));
           scanBtn.disabled = false;
@@ -315,16 +468,49 @@ function setupEventListeners() {
   }
   
   // Bouton reset
-  document.getElementById('reset-btn').addEventListener('click', async () => {
-    if (confirm('Voulez-vous vraiment réinitialiser toutes les statistiques ? (Input actuel + Total cumulé)')) {
-      // Envoyer un message au background pour réinitialiser TOUT
-      await chrome.runtime.sendMessage({
-        type: 'RESET_ALL_STATS'
-      });
-      
-      await loadStats();
-    }
-  });
+  const resetBtn = document.getElementById('reset-btn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', async () => {
+      if (confirm('Voulez-vous vraiment réinitialiser toutes les statistiques ? (Input actuel + Total cumulé)')) {
+        resetBtn.disabled = true;
+        resetBtn.textContent = '⏳ Réinitialisation...';
+        
+        try {
+          // Envoyer un message au background pour réinitialiser TOUT
+          await chrome.runtime.sendMessage({
+            type: 'RESET_ALL_STATS'
+          });
+          
+          // Recharger les stats immédiatement puis plusieurs fois pour s'assurer que tout est à jour
+          await loadStats(); // Premier rafraîchissement immédiat
+          
+          // Rafraîchir plusieurs fois pour capturer tous les changements
+          setTimeout(async () => {
+            await loadStats();
+          }, 200);
+          
+          setTimeout(async () => {
+            await loadStats();
+          }, 500);
+          
+          setTimeout(async () => {
+            await loadStats();
+          }, 1000);
+          
+          setTimeout(async () => {
+            await loadStats(); // Dernier rafraîchissement
+            resetBtn.disabled = false;
+            resetBtn.textContent = '🔄 Réinitialiser les statistiques';
+          }, 1500);
+        } catch (error) {
+          console.error('Erreur réinitialisation:', error);
+          resetBtn.disabled = false;
+          resetBtn.textContent = '🔄 Réinitialiser les statistiques';
+          alert('⚠️ Erreur lors de la réinitialisation: ' + error.message);
+        }
+      }
+    });
+  }
 }
 
 /**
