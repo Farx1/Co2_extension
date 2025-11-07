@@ -102,8 +102,11 @@ async function loadStats() {
     history.forEach(exchange => {
       cumulativeStats.promptTokens += exchange.prompt_token_length || exchange.promptTokens || 0;
       cumulativeStats.responseTokens += exchange.response_token_length || exchange.responseTokens || 0;
-      cumulativeStats.energyJoules += exchange.energyJoules || 0;
-      cumulativeStats.co2Grams += exchange.co2Grams || 0;
+      // Utiliser les bons noms de champs (energy_consumption_llm_total et co2_grams)
+      const energy = exchange.energy_consumption_llm_total || exchange.energyJoules || 0;
+      const co2 = exchange.co2_grams || exchange.co2Grams || 0;
+      cumulativeStats.energyJoules += energy;
+      cumulativeStats.co2Grams += co2;
     });
     
     // Si on a un lastExchange qui n'est pas encore dans l'historique, l'inclure dans le calcul
@@ -166,8 +169,11 @@ async function loadStats() {
     if (lastExchange) {
       document.getElementById('current-prompt-tokens').textContent = (lastExchange.prompt_token_length || lastExchange.promptTokens || 0).toLocaleString();
       document.getElementById('current-response-tokens').textContent = (lastExchange.response_token_length || lastExchange.responseTokens || 0).toLocaleString();
-      document.getElementById('current-energy').textContent = (lastExchange.energyJoules || 0).toFixed(6);
-      document.getElementById('current-co2').textContent = formatCO2(lastExchange.co2Grams || 0);
+      // Utiliser les bons noms de champs
+      const currentEnergy = lastExchange.energy_consumption_llm_total || lastExchange.energyJoules || 0;
+      const currentCO2 = lastExchange.co2_grams || lastExchange.co2Grams || 0;
+      document.getElementById('current-energy').textContent = currentEnergy.toFixed(6);
+      document.getElementById('current-co2').textContent = formatCO2(currentCO2);
       
       // Afficher la source de prédiction
       const predictionSource = lastExchange.predictionSource || 'local';
@@ -183,17 +189,27 @@ async function loadStats() {
       document.getElementById('current-prediction-source').textContent = '-';
     }
     
-    // Total cumulé
+    // Total cumulé - utiliser cumulativeStats si totalStats est vide ou a des valeurs à 0
+    const finalTotalTokens = (totalStats.tokens && totalStats.tokens > 0) 
+      ? totalStats.tokens 
+      : (cumulativeStats.promptTokens + cumulativeStats.responseTokens);
+    const finalTotalCO2 = (totalStats.co2Grams && totalStats.co2Grams > 0)
+      ? totalStats.co2Grams
+      : cumulativeStats.co2Grams;
+    const finalTotalRequests = (totalStats.requests && totalStats.requests > 0)
+      ? totalStats.requests
+      : cumulativeStats.requests;
+    
     const totalRequestsEl = document.getElementById('total-requests');
     const totalTokensEl = document.getElementById('total-tokens');
     const totalCo2El = document.getElementById('total-co2');
     
-    if (totalRequestsEl) totalRequestsEl.textContent = (totalStats.requests || 0).toLocaleString();
-    if (totalTokensEl) totalTokensEl.textContent = (totalStats.tokens || 0).toLocaleString();
-    if (totalCo2El) totalCo2El.textContent = formatCO2(totalStats.co2Grams || 0);
+    if (totalRequestsEl) totalRequestsEl.textContent = finalTotalRequests.toLocaleString();
+    if (totalTokensEl) totalTokensEl.textContent = finalTotalTokens.toLocaleString();
+    if (totalCo2El) totalCo2El.textContent = formatCO2(finalTotalCO2);
     
     // Équivalence
-    updateEquivalence(totalStats.co2Grams);
+    updateEquivalence(finalTotalCO2);
     
     // Envoyer les deux au modèle pour comparaison si on a des données
     if (lastExchange && history.length > 0) {
@@ -507,6 +523,69 @@ function setupEventListeners() {
           resetBtn.disabled = false;
           resetBtn.textContent = '🔄 Réinitialiser les statistiques';
           alert('⚠️ Erreur lors de la réinitialisation: ' + error.message);
+        }
+      }
+    });
+  }
+  
+  // Bouton simulation
+  const simulateBtn = document.getElementById('simulate-btn');
+  if (simulateBtn) {
+    simulateBtn.addEventListener('click', async () => {
+      if (confirm('🎲 Voulez-vous générer des données simulées sur 1 an ?\n\nCela ajoutera environ 3000 échanges avec des variations mensuelles réalistes.\n\nLes données existantes seront conservées.')) {
+        simulateBtn.disabled = true;
+        simulateBtn.textContent = '⏳ Simulation en cours...';
+        
+        try {
+          console.log('📤 Envoi message SIMULATE_ONE_YEAR...');
+          
+          // Vérifier que le service worker est disponible
+          if (!chrome.runtime?.id) {
+            throw new Error('Service worker non disponible. Veuillez recharger l\'extension.');
+          }
+          
+          const response = await chrome.runtime.sendMessage({
+            type: 'SIMULATE_ONE_YEAR'
+          });
+          
+          console.log('📥 Réponse reçue:', response);
+          
+          if (!response) {
+            throw new Error('Aucune réponse du service worker. Le service worker peut être inactif. Essayez de recharger l\'extension.');
+          }
+          
+          if (response && response.success) {
+            simulateBtn.textContent = '✅ Simulation terminée !';
+            
+            // Afficher un message de succès
+            alert(`✅ Simulation terminée avec succès !\n\n` +
+                  `📊 ${response.exchangesAdded} échanges ajoutés\n` +
+                  `📈 Total: ${response.totalExchanges} échanges\n` +
+                  `⚡ Énergie totale: ${(response.totalEnergy / 3600000).toFixed(4)} kWh\n` +
+                  `🌍 CO₂ total: ${(response.totalCO2 / 1000).toFixed(4)} kg\n\n` +
+                  `Rechargez le dashboard pour voir les graphiques !`);
+            
+            // Recharger les stats
+            await loadStats();
+            
+            setTimeout(() => {
+              simulateBtn.textContent = '🎲 Simuler 1 an de données';
+              simulateBtn.disabled = false;
+            }, 3000);
+          } else {
+            const errorMsg = response?.error || 'Erreur inconnue lors de la simulation';
+            console.error('❌ Erreur simulation:', errorMsg, response);
+            throw new Error(errorMsg);
+          }
+        } catch (error) {
+          console.error('❌ Erreur simulation complète:', error);
+          simulateBtn.textContent = '❌ Erreur';
+          const errorMessage = error.message || 'Erreur inconnue. Vérifiez la console pour plus de détails.';
+          alert('❌ Erreur lors de la simulation: ' + errorMessage);
+          setTimeout(() => {
+            simulateBtn.textContent = '🎲 Simuler 1 an de données';
+            simulateBtn.disabled = false;
+          }, 2000);
         }
       }
     });

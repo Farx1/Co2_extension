@@ -8,6 +8,104 @@ let datasetData = null;
 
 // Paliers de référence pour la consommation énergétique (kWh/mois)
 // Basés sur des estimations moyennes pour différents types d'utilisateurs d'IA
+/**
+ * Formater l'énergie avec l'unité adaptée automatiquement
+ */
+function formatEnergyAdaptive(energyJoules) {
+  if (!energyJoules || energyJoules === 0 || isNaN(energyJoules)) {
+    return { value: '0', unit: 'J', display: '0 J' };
+  }
+  
+  // Convertir en différentes unités
+  const energyKwh = energyJoules / 3600000;
+  const energyKj = energyJoules / 1000;
+  const energyMj = energyJoules / 1000000;
+  
+  // Choisir l'unité la plus appropriée (ajouter µWh et nWh pour les très petites valeurs)
+  if (energyKwh >= 0.001) {
+    // >= 1 Wh : utiliser kWh
+    return {
+      value: energyKwh.toFixed(4),
+      unit: 'kWh',
+      display: `${energyKwh.toFixed(4)} kWh`,
+      joules: energyJoules
+    };
+  } else if (energyKwh >= 0.000001) {
+    // >= 1 mWh : utiliser Wh
+    const wh = energyKwh * 1000;
+    return {
+      value: wh.toFixed(4),
+      unit: 'Wh',
+      display: `${wh.toFixed(4)} Wh`,
+      joules: energyJoules
+    };
+  } else if (energyKwh >= 0.000000001) {
+    // >= 1 µWh : utiliser mWh
+    const mwh = energyKwh * 1000000;
+    return {
+      value: mwh.toFixed(4),
+      unit: 'mWh',
+      display: `${mwh.toFixed(4)} mWh`,
+      joules: energyJoules
+    };
+  } else if (energyKwh >= 0.000000000001) {
+    // >= 1 nWh : utiliser µWh
+    const uwh = energyKwh * 1000000000;
+    return {
+      value: uwh.toFixed(4),
+      unit: 'µWh',
+      display: `${uwh.toFixed(4)} µWh`,
+      joules: energyJoules
+    };
+  } else if (energyKj >= 0.1) {
+    // >= 100 J : utiliser kJ (fallback si très petit en kWh mais grand en J)
+    return {
+      value: energyKj.toFixed(2),
+      unit: 'kJ',
+      display: `${energyKj.toFixed(2)} kJ`,
+      joules: energyJoules
+    };
+  } else if (energyJoules >= 1) {
+    // >= 1 J : utiliser J
+    return {
+      value: energyJoules.toFixed(2),
+      unit: 'J',
+      display: `${energyJoules.toFixed(2)} J`,
+      joules: energyJoules
+    };
+  } else if (energyMj >= 0.001) {
+    // >= 1 mJ : utiliser mJ
+    const mj = energyJoules * 1000;
+    return {
+      value: mj.toFixed(2),
+      unit: 'mJ',
+      display: `${mj.toFixed(2)} mJ`,
+      joules: energyJoules
+    };
+  } else {
+    // Très petit : utiliser nWh ou µJ selon le contexte
+    if (energyKwh > 0) {
+      // Si on a une valeur en kWh (même très petite), utiliser nWh
+      const nwh = energyKwh * 1000000000000;
+      return {
+        value: nwh.toFixed(4),
+        unit: 'nWh',
+        display: `${nwh.toFixed(4)} nWh`,
+        joules: energyJoules
+      };
+    } else {
+      // Sinon utiliser µJ
+      const uj = energyJoules * 1000000;
+      return {
+        value: uj.toFixed(2),
+        unit: 'µJ',
+        display: `${uj.toFixed(2)} µJ`,
+        joules: energyJoules
+      };
+    }
+  }
+}
+
 const REFERENCE_TIERS = {
   'personne_normale': {
     name: '👤 Personne Normale',
@@ -55,17 +153,17 @@ async function loadLocalDatasetData() {
     function predictEnergyLocalSimple(params) {
       const { modelName, promptTokens, responseTokens } = params;
       
-      // Coefficients simplifiés basés sur la taille du modèle
+      // Coefficients simplifiés basés sur la taille du modèle (valeurs mises à jour pour être réalistes)
       const modelSizes = {
-        'gpt-4': { base: 0.5, perToken: 0.0001 },
-        'gpt-4-turbo': { base: 0.4, perToken: 0.00008 },
-        'gpt-3.5': { base: 0.1, perToken: 0.00005 },
-        'gpt-3.5-turbo': { base: 0.1, perToken: 0.00005 },
-        'claude-3-opus': { base: 0.6, perToken: 0.00012 },
-        'claude-3-sonnet': { base: 0.3, perToken: 0.00008 },
-        'claude-3-haiku': { base: 0.15, perToken: 0.00005 },
-        'gemini-pro': { base: 0.2, perToken: 0.00006 },
-        'default': { base: 0.2, perToken: 0.00006 }
+        'gpt-4': { base: 2.0, perToken: 0.015 },
+        'gpt-4-turbo': { base: 1.5, perToken: 0.012 },
+        'gpt-3.5': { base: 0.5, perToken: 0.003 },
+        'gpt-3.5-turbo': { base: 0.5, perToken: 0.003 },
+        'claude-3-opus': { base: 3.0, perToken: 0.018 },
+        'claude-3-sonnet': { base: 1.2, perToken: 0.010 },
+        'claude-3-haiku': { base: 0.6, perToken: 0.005 },
+        'gemini-pro': { base: 0.8, perToken: 0.008 },
+        'default': { base: 0.8, perToken: 0.008 }
       };
       
       // Détecter la taille du modèle
@@ -101,50 +199,110 @@ async function loadLocalDatasetData() {
     }
     
     // Combiner les deux sources et convertir au format attendu
-    const allData = [...history, ...queue].map(exchange => {
-      let energyJoules = parseFloat(exchange.energyJoules) || 0;
-      let co2Grams = parseFloat(exchange.co2Grams) || 0;
+    // Utiliser energy_consumption_llm_total en priorité, puis energyJoules
+    // Convertir en Promise.all pour gérer les prédictions asynchrones
+    const allDataPromises = [...history, ...queue].map(async (exchange) => {
+      let energyJoules = parseFloat(exchange.energy_consumption_llm_total) || parseFloat(exchange.energyJoules) || 0;
+      let co2Grams = parseFloat(exchange.co2_grams) || parseFloat(exchange.co2Grams) || 0;
       
-      // Si pas d'énergie mais qu'on a des tokens, recalculer
-      if (energyJoules === 0) {
+      // Si pas d'énergie ou énergie très petite (< 0.01 J) mais qu'on a des tokens, recalculer
+      if (energyJoules === 0 || energyJoules < 0.01) {
         const promptTokens = exchange.prompt_token_length || exchange.promptTokens || 0;
         const responseTokens = exchange.response_token_length || exchange.responseTokens || 0;
         const model = exchange.model_name || exchange.model || 'gpt-4';
+        const totalDuration = exchange.total_duration || exchange.totalDuration || null;
+        const responseDuration = exchange.response_duration || exchange.responseDuration || null;
+        const wordCount = exchange.word_count || exchange.wordCount || null;
+        const readingTime = exchange.reading_time || exchange.readingTime || null;
         
         if (promptTokens > 0 || responseTokens > 0) {
-          // Essayer de recalculer avec le modèle local
-          if (predictEnergyLocal) {
-            try {
+          try {
+            // PRIORITÉ: Utiliser la fonction predictEnergy complète (Watsonx → serveur local → modèle local)
+            // Cette fonction gère automatiquement le mode de prédiction configuré
+            if (typeof predictEnergy === 'function') {
+              // Vérifier si on a toutes les données pour Watsonx/serveur local
+              const hasAllData = totalDuration !== null && 
+                                 responseDuration !== null && 
+                                 wordCount !== null && 
+                                 readingTime !== null &&
+                                 !isNaN(totalDuration) && 
+                                 !isNaN(responseDuration) && 
+                                 !isNaN(wordCount) && 
+                                 !isNaN(readingTime);
+              
+              if (hasAllData) {
+                // Utiliser predictEnergy avec toutes les données (essaiera Watsonx, serveur local, puis modèle local)
+                energyJoules = await predictEnergy(
+                  model,
+                  promptTokens,
+                  responseTokens,
+                  totalDuration,
+                  responseDuration,
+                  wordCount,
+                  readingTime
+                );
+                console.log('✅ Énergie recalculée avec predictEnergy (Watsonx/serveur/local):', {
+                  id: exchange.id,
+                  model,
+                  energyJoules: energyJoules.toFixed(8),
+                  source: 'predictEnergy (full)'
+                });
+              } else {
+                // Données incomplètes, utiliser le modèle local simple
+                if (predictEnergyLocal) {
+                  energyJoules = predictEnergyLocal({
+                    modelName: model,
+                    promptTokens: promptTokens,
+                    responseTokens: responseTokens
+                  });
+                  console.log('✅ Énergie recalculée avec modèle local (données incomplètes):', {
+                    id: exchange.id,
+                    model,
+                    energyJoules: energyJoules.toFixed(8),
+                    source: 'local (incomplete data)'
+                  });
+                }
+              }
+            } else if (predictEnergyLocal) {
+              // Fallback vers modèle local simple
               energyJoules = predictEnergyLocal({
                 modelName: model,
                 promptTokens: promptTokens,
                 responseTokens: responseTokens
               });
-              
-              // Recalculer CO₂ si nécessaire
-              if (energyJoules > 0 && co2Grams === 0) {
-                const energyKwh = energyJoules / 3600000;
-                const globalIntensity = 480; // gCO₂/kWh
-                co2Grams = energyKwh * globalIntensity;
-              }
-              
-              console.log('✅ Énergie recalculée pour échange:', {
+              console.log('✅ Énergie recalculée avec modèle local (fallback):', {
                 id: exchange.id,
                 model,
-                promptTokens,
-                responseTokens,
-                energyJoules: energyJoules.toFixed(8)
+                energyJoules: energyJoules.toFixed(8),
+                source: 'local (fallback)'
               });
-            } catch (error) {
-              console.warn('⚠️ Erreur recalcul énergie:', error);
             }
-          } else {
-            console.warn('⚠️ Échange sans énergie et fonction predictEnergy non disponible:', {
-              id: exchange.id,
-              promptTokens,
-              responseTokens,
-              model
-            });
+            
+            // Recalculer CO₂ si nécessaire
+            if (energyJoules > 0 && co2Grams === 0) {
+              const energyKwh = energyJoules / 3600000;
+              const globalIntensity = 480; // gCO₂/kWh
+              co2Grams = energyKwh * globalIntensity;
+            }
+          } catch (error) {
+            console.warn('⚠️ Erreur recalcul énergie:', error);
+            // En cas d'erreur, essayer le modèle local simple
+            if (predictEnergyLocal) {
+              try {
+                energyJoules = predictEnergyLocal({
+                  modelName: model,
+                  promptTokens: promptTokens,
+                  responseTokens: responseTokens
+                });
+                if (energyJoules > 0 && co2Grams === 0) {
+                  const energyKwh = energyJoules / 3600000;
+                  const globalIntensity = 480;
+                  co2Grams = energyKwh * globalIntensity;
+                }
+              } catch (fallbackError) {
+                console.warn('⚠️ Erreur même avec modèle local:', fallbackError);
+              }
+            }
           }
         }
       }
@@ -166,6 +324,9 @@ async function loadLocalDatasetData() {
         timestamp: exchange.timestamp || (exchange.id ? parseInt(exchange.id.split('-')[1]) : Date.now())
       };
     });
+    
+    // Attendre que toutes les prédictions asynchrones soient terminées
+    const allData = await Promise.all(allDataPromises);
     
     console.log('📊 Données converties:', {
       totalItems: allData.length,
@@ -255,6 +416,19 @@ async function initDashboard() {
   // Ne plus charger de datasets - on utilise uniquement le modèle déployé pour les prédictions
   // Les données sont collectées localement et peuvent être utilisées pour tester le modèle
   
+  // Vérifier si Watsonx est configuré et déclencher automatiquement le test d'authentification
+  const configResult = await chrome.storage.local.get(['watsonxConfig']);
+  if (configResult.watsonxConfig && 
+      configResult.watsonxConfig.apiKey && 
+      configResult.watsonxConfig.projectId && 
+      configResult.watsonxConfig.deploymentId) {
+    console.log('🔄 Watsonx configuré, déclenchement automatique du test d\'authentification...');
+    // Attendre un peu que tout soit initialisé
+    setTimeout(async () => {
+      await testWatsonxConnection();
+    }, 1000);
+  }
+  
   // Ajouter les event listeners pour les onglets (plus robuste que onclick)
   setupTabListeners();
   
@@ -272,6 +446,9 @@ async function initDashboard() {
   
   // Écouter les changements dans chrome.storage pour mettre à jour le dashboard en temps réel
   setupRealtimeUpdates();
+  
+  // Écouter les messages du background pour les mises à jour automatiques
+  setupMessageListener();
   
   // S'assurer que l'onglet overview est visible par défaut
   const overviewTab = document.getElementById('overview');
@@ -327,6 +504,89 @@ function setupConfigButtons() {
       e.stopPropagation();
       console.log('🔍 Clic sur Tester la Connexion');
       await testWatsonxConnection();
+    });
+  }
+  
+  // Bouton Simulation
+  const simulateBtn = document.getElementById('btn-simulate-data');
+  if (simulateBtn) {
+    simulateBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('🎲 Clic sur Simuler 1 an de données');
+      
+      if (confirm('🎲 Voulez-vous générer des données simulées sur 1 an ?\n\n' +
+                  'Cela ajoutera environ 3000 échanges avec des variations mensuelles réalistes.\n\n' +
+                  'Les données existantes seront conservées.')) {
+        simulateBtn.disabled = true;
+        simulateBtn.textContent = '⏳ Simulation en cours...';
+        
+        try {
+          console.log('📤 Envoi message SIMULATE_ONE_YEAR...');
+          
+          // Vérifier que le service worker est disponible
+          if (!chrome.runtime?.id) {
+            throw new Error('Service worker non disponible. Veuillez recharger l\'extension.');
+          }
+          
+          const response = await chrome.runtime.sendMessage({
+            type: 'SIMULATE_ONE_YEAR'
+          });
+          
+          console.log('📥 Réponse reçue:', response);
+          
+          if (!response) {
+            throw new Error('Aucune réponse du service worker. Le service worker peut être inactif. Essayez de recharger l\'extension.');
+          }
+          
+          if (response && response.success) {
+            simulateBtn.textContent = '✅ Simulation terminée !';
+            
+            // Afficher un message de succès
+            showStatus(
+              `✅ Simulation terminée avec succès !\n\n` +
+              `📊 ${response.exchangesAdded} échanges ajoutés\n` +
+              `📈 Total: ${response.totalExchanges} échanges\n` +
+              `⚡ Énergie totale: ${(response.totalEnergy / 3600000).toFixed(4)} kWh\n` +
+              `🌍 CO₂ total: ${(response.totalCO2 / 1000).toFixed(4)} kg\n\n` +
+              `Rechargez les onglets pour voir les graphiques !`,
+              'success',
+              'config-status'
+            );
+            
+            // Recharger les données après un court délai
+            setTimeout(async () => {
+              await loadLocalDatasetData();
+              await loadOverview();
+              // Recharger aussi les autres onglets si nécessaire
+              const currentTab = document.querySelector('.nav-tab.active')?.getAttribute('data-tab');
+              if (currentTab === 'compare') {
+                if (typeof window.loadRecentPromptsComparison === 'function') {
+                  await window.loadRecentPromptsComparison();
+                }
+              }
+            }, 1000);
+            
+            setTimeout(() => {
+              simulateBtn.textContent = '🎲 Simuler 1 an de données';
+              simulateBtn.disabled = false;
+            }, 3000);
+          } else {
+            const errorMsg = response?.error || 'Erreur inconnue lors de la simulation';
+            console.error('❌ Erreur simulation:', errorMsg, response);
+            throw new Error(errorMsg);
+          }
+        } catch (error) {
+          console.error('❌ Erreur simulation complète:', error);
+          simulateBtn.textContent = '❌ Erreur';
+          const errorMessage = error.message || 'Erreur inconnue. Vérifiez la console pour plus de détails.';
+          showStatus('❌ Erreur lors de la simulation: ' + errorMessage, 'error', 'config-status');
+          setTimeout(() => {
+            simulateBtn.textContent = '🎲 Simuler 1 an de données';
+            simulateBtn.disabled = false;
+          }, 2000);
+        }
+      }
     });
   }
   
@@ -719,9 +979,14 @@ async function testWatsonxConnection() {
             : '\n⚠️ Deployment ID non configuré - Configurez-le pour utiliser le modèle déployé';
           showStatus(`✅ Authentification réussie !${deploymentInfo}`, 'success');
           
-          // Si le Deployment ID est configuré, calculer la prédiction annuelle
+          // Si le Deployment ID est configuré, calculer la prédiction annuelle et mettre à jour toutes les prédictions
           if (checkConfig.watsonxConfig.deploymentId) {
+            console.log('🔄 Mise à jour des prédictions après test d\'authentification...');
+            // Recharger les données avec les nouvelles prédictions
+            await loadOverview();
+            // Calculer aussi la prédiction annuelle détaillée
             await calculateAnnualPrediction();
+            showStatus('✅ Prédictions mises à jour avec le modèle Watsonx', 'success');
           }
         } else {
           showStatus('❌ Échec de l\'authentification - Token non obtenu', 'error');
@@ -1629,37 +1894,137 @@ async function loadOverview() {
       allEnergyValues: datasetData.slice(0, 5).map(r => r.energy_consumption_llm_total)
     });
     
-    // Calculer l'énergie totale (en kWh)
-    let totalEnergyJoules = 0;
-    let totalCO2 = 0;
+    // Calculer les moyennes pour la prédiction du modèle
+    let avgPromptTokens = 0;
+    let avgResponseTokens = 0;
+    let avgTotalDuration = 0;
+    let avgResponseDuration = 0;
+    let avgWordCount = 0;
+    let avgReadingTime = 0;
+    
+    // Compter les échanges avec énergie pour statistiques
     let rowsWithEnergy = 0;
     datasetData.forEach((row, index) => {
       const energy = parseFloat(row.energy_consumption_llm_total) || 0;
       if (energy > 0) {
         rowsWithEnergy++;
       }
-      totalEnergyJoules += energy;
-      
-      // Calculer CO₂
-      if (row.co2_grams) {
-        totalCO2 += parseFloat(row.co2_grams) || 0;
-      } else {
-        const energyKwh = energy / 3600000;
-        const globalIntensity = carbonIntensityData?.countries?.global_average?.intensity || 480;
-        const co2 = energyKwh * globalIntensity;
-        totalCO2 += co2;
-      }
     });
     
-    console.log('📊 Résultats calculs:', {
+    // Calculer les moyennes depuis les données
+    if (totalMeasures > 0) {
+      avgPromptTokens = datasetData.reduce((sum, d) => sum + (parseInt(d.prompt_token_length || d.promptTokens || 0)), 0) / totalMeasures;
+      avgResponseTokens = datasetData.reduce((sum, d) => sum + (parseInt(d.response_token_length || d.responseTokens || 0)), 0) / totalMeasures;
+      avgTotalDuration = datasetData.reduce((sum, d) => sum + (parseFloat(d.total_duration || d.totalDuration || 0)), 0) / totalMeasures;
+      avgResponseDuration = datasetData.reduce((sum, d) => sum + (parseFloat(d.response_duration || d.responseDuration || 0)), 0) / totalMeasures;
+      avgWordCount = datasetData.reduce((sum, d) => sum + (parseInt(d.word_count || d.wordCount || 0)), 0) / totalMeasures;
+      avgReadingTime = datasetData.reduce((sum, d) => sum + (parseFloat(d.reading_time || d.readingTime || 0)), 0) / totalMeasures;
+    }
+    
+    // Calculer l'énergie par échange avec le modèle (Watsonx → serveur local → modèle local)
+    let energyPerExchange = 0;
+    let predictionSource = 'local';
+    const globalIntensity = carbonIntensityData?.countries?.global_average?.intensity || 480;
+    
+    // Vérifier si on a toutes les données pour Watsonx/serveur local
+    const hasAllData = avgTotalDuration > 0 && avgResponseDuration > 0 && avgWordCount > 0 && avgReadingTime > 0;
+    
+    if (hasAllData && typeof predictEnergy === 'function') {
+      try {
+        // Obtenir le mode de prédiction
+        const predictionMode = await getPredictionMode();
+        
+        // Essayer Watsonx si configuré
+        if (predictionMode === 'watsonx' && window.WatsonxService && window.WatsonxService.predictEnergyWithDeployedModel) {
+          try {
+            energyPerExchange = await window.WatsonxService.predictEnergyWithDeployedModel({
+              totalDuration: avgTotalDuration,
+              promptTokens: avgPromptTokens,
+              responseTokens: avgResponseTokens,
+              responseDuration: avgResponseDuration,
+              wordCount: avgWordCount,
+              readingTime: avgReadingTime
+            });
+            if (energyPerExchange !== null && !isNaN(energyPerExchange) && energyPerExchange > 0) {
+              predictionSource = 'deployed';
+            }
+          } catch (error) {
+            console.warn('⚠️ Erreur prédiction Watsonx dans vue d\'ensemble, fallback:', error);
+          }
+        }
+        
+        // Essayer serveur local si mode server
+        if (energyPerExchange === 0 && predictionMode === 'server' && window.ServerPredictor) {
+          try {
+            energyPerExchange = await window.ServerPredictor.predict({
+              totalDuration: avgTotalDuration,
+              promptTokens: avgPromptTokens,
+              responseTokens: avgResponseTokens,
+              responseDuration: avgResponseDuration,
+              wordCount: avgWordCount,
+              readingTime: avgReadingTime
+            });
+            if (energyPerExchange !== null && !isNaN(energyPerExchange) && energyPerExchange > 0) {
+              predictionSource = 'server';
+            }
+          } catch (error) {
+            console.warn('⚠️ Erreur prédiction serveur local dans vue d\'ensemble, fallback:', error);
+          }
+        }
+        
+        // Fallback vers predictEnergy complète
+        if (energyPerExchange === 0) {
+          energyPerExchange = await predictEnergy(
+            'unknown',
+            avgPromptTokens,
+            avgResponseTokens,
+            avgTotalDuration,
+            avgResponseDuration,
+            avgWordCount,
+            avgReadingTime
+          );
+        }
+      } catch (error) {
+        console.warn('⚠️ Erreur prédiction dans vue d\'ensemble, utilisation moyenne historique:', error);
+      }
+    }
+    
+    // Si toujours 0, utiliser la moyenne historique par échange
+    if (energyPerExchange === 0 || isNaN(energyPerExchange)) {
+      const historicalTotalEnergy = datasetData.reduce((sum, d) => sum + (parseFloat(d.energy_consumption_llm_total) || 0), 0);
+      energyPerExchange = totalMeasures > 0 ? historicalTotalEnergy / totalMeasures : 0;
+      predictionSource = 'historical';
+    }
+    
+    // Calculer l'énergie totale et CO₂ total depuis les prédictions du modèle
+    // Utiliser l'énergie prédite par échange × nombre total d'échanges
+    const totalEnergyJoules = energyPerExchange * totalMeasures;
+    const totalEnergyKwhCalculated = totalEnergyJoules / 3600000;
+    const totalCO2 = totalEnergyKwhCalculated * globalIntensity; // en grammes
+    const totalCO2KgCalculated = totalCO2 / 1000;
+    
+    console.log('📊 Résultats calculs (basés sur prédictions du modèle):', {
+      totalMeasures,
+      energyPerExchange,
+      energyPerExchangeKwh: energyPerExchange / 3600000,
       totalEnergyJoules,
-      totalEnergyKwh: totalEnergyJoules / 3600000,
-      totalCO2,
-      rowsWithEnergy,
-      rowsWithoutEnergy: totalMeasures - rowsWithEnergy
+      totalEnergyKwh: totalEnergyKwhCalculated,
+      totalCO2Grams: totalCO2,
+      totalCO2Kg: totalCO2KgCalculated,
+      carbonIntensity: globalIntensity,
+      predictionSource,
+      formula: `${totalMeasures} échanges × ${(energyPerExchange / 3600000).toFixed(8)} kWh/échange = ${totalEnergyKwhCalculated.toFixed(6)} kWh`,
+      co2Formula: `${totalEnergyKwhCalculated.toFixed(6)} kWh × ${globalIntensity} gCO₂/kWh = ${totalCO2.toFixed(2)} g`
     });
     
     const totalEnergyKwh = totalEnergyJoules / 3600000;
+    
+    console.log('📊 Calculs énergie vue d\'ensemble:', {
+      totalEnergyJoules,
+      totalEnergyKwh,
+      totalMeasures,
+      avgPerExchange: totalMeasures > 0 ? totalEnergyJoules / totalMeasures : 0
+    });
     
     // Calculer la période de collecte (en jours)
     const timestamps = datasetData.map(d => d.timestamp || Date.now()).filter(Boolean);
@@ -1685,20 +2050,29 @@ async function loadOverview() {
       monthlyEnergyKwh = avgEnergyPerExchange * 4 * daysInMonth;
     }
     
-    // Prédiction annuelle
-    let annualEnergyKwh = monthlyEnergyKwh * 12;
+    // Estimer le nombre d'échanges par jour pour la prédiction annuelle
+    const exchangesPerDayForPrediction = daysDiff > 0 ? totalMeasures / daysDiff : 7.7; // Utiliser la valeur observée
+    const projectedExchanges = Math.round(exchangesPerDayForPrediction * 365);
     
-    // Si toujours 0, utiliser une estimation minimale basée sur les tokens
-    if (annualEnergyKwh === 0 && totalMeasures > 0) {
-      const totalTokens = datasetData.reduce((sum, d) => 
-        sum + (parseInt(d.prompt_token_length || d.promptTokens || 0) + 
-               parseInt(d.response_token_length || d.responseTokens || 0)), 0);
-      const avgTokensPerExchange = totalTokens / totalMeasures;
-      // Estimation: 0.00001 Joules par token, 4 échanges/jour
-      const estimatedEnergyPerExchange = avgTokensPerExchange * 0.00001;
-      annualEnergyKwh = (estimatedEnergyPerExchange * 4 * 365) / 3600000;
-      monthlyEnergyKwh = annualEnergyKwh / 12;
-    }
+    // Calculer la prédiction annuelle en utilisant la même énergie par échange que pour le total
+    // (déjà calculée ci-dessus avec le modèle Watsonx/serveur local/modèle local)
+    const annualEnergyJoules = energyPerExchange * projectedExchanges;
+    let annualEnergyKwh = annualEnergyJoules / 3600000;
+    
+    // Recalculer monthlyEnergyKwh depuis annualEnergyKwh pour cohérence
+    monthlyEnergyKwh = annualEnergyKwh / 12;
+    
+    console.log('📊 Prédiction annuelle vue d\'ensemble (basée sur prédictions du modèle):', {
+      avgPromptTokens,
+      avgResponseTokens,
+      exchangesPerDay: exchangesPerDayForPrediction,
+      projectedExchanges,
+      energyPerExchange,
+      energyPerExchangeKwh: energyPerExchange / 3600000,
+      annualEnergyKwh,
+      predictionSource,
+      formula: `${projectedExchanges} échanges × ${(energyPerExchange / 3600000).toFixed(8)} kWh/échange = ${annualEnergyKwh.toFixed(6)} kWh`
+    });
     
     // Calculer les statistiques supplémentaires
     let totalTokens = 0;
@@ -1712,36 +2086,53 @@ async function loadOverview() {
       totalTokens += promptTokens + responseTokens;
     });
     
-    const avgEnergyPerExchange = totalMeasures > 0 ? totalEnergyKwh / totalMeasures : 0;
+    const avgEnergyPerExchangeJoules = totalMeasures > 0 ? totalEnergyJoules / totalMeasures : 0;
+    const avgEnergyPerExchange = avgEnergyPerExchangeJoules / 3600000; // en kWh
     const avgTokensPerExchange = totalMeasures > 0 ? totalTokens / totalMeasures : 0;
     const exchangesPerDay = daysDiff > 0 ? totalMeasures / daysDiff : 0;
     
     // Calculer les statistiques par plateforme
     const platformStats = {};
+    const globalIntensityForStats = carbonIntensityData?.countries?.global_average?.intensity || 480;
     datasetData.forEach(row => {
       const platform = row.platform || 'unknown';
       if (!platformStats[platform]) {
         platformStats[platform] = { count: 0, energy: 0, tokens: 0, co2: 0 };
       }
       platformStats[platform].count++;
-      platformStats[platform].energy += parseFloat(row.energy_consumption_llm_total) || 0;
+      const energy = parseFloat(row.energy_consumption_llm_total) || 0;
+      platformStats[platform].energy += energy;
       platformStats[platform].tokens += parseInt(row.prompt_token_length || row.promptTokens || 0) + 
                                          parseInt(row.response_token_length || row.responseTokens || 0);
-      platformStats[platform].co2 += parseFloat(row.co2_grams) || 0;
+      // Recalculer CO₂ depuis l'énergie pour garantir la cohérence
+      if (energy > 0) {
+        const energyKwh = energy / 3600000;
+        platformStats[platform].co2 += energyKwh * globalIntensityForStats;
+      } else if (row.co2_grams) {
+        platformStats[platform].co2 += parseFloat(row.co2_grams) || 0;
+      }
     });
     
     // Calculer les statistiques par modèle
     const modelStats = {};
+    const globalIntensityForModelStats = carbonIntensityData?.countries?.global_average?.intensity || 480;
     datasetData.forEach(row => {
       const model = row.model_name || row.model || 'unknown';
       if (!modelStats[model]) {
         modelStats[model] = { count: 0, energy: 0, tokens: 0, co2: 0 };
       }
       modelStats[model].count++;
-      modelStats[model].energy += parseFloat(row.energy_consumption_llm_total) || 0;
+      const energy = parseFloat(row.energy_consumption_llm_total) || 0;
+      modelStats[model].energy += energy;
       modelStats[model].tokens += parseInt(row.prompt_token_length || row.promptTokens || 0) + 
                                    parseInt(row.response_token_length || row.responseTokens || 0);
-      modelStats[model].co2 += parseFloat(row.co2_grams) || 0;
+      // Recalculer CO₂ depuis l'énergie pour garantir la cohérence
+      if (energy > 0) {
+        const energyKwh = energy / 3600000;
+        modelStats[model].co2 += energyKwh * globalIntensityForModelStats;
+      } else if (row.co2_grams) {
+        modelStats[model].co2 += parseFloat(row.co2_grams) || 0;
+      }
     });
     
     // Mettre à jour les stats principales
@@ -1758,24 +2149,61 @@ async function loadOverview() {
       }
     }
     if (totalEnergyEl) {
-      totalEnergyEl.textContent = totalEnergyKwh.toFixed(3);
+      // Utiliser le formatage adaptatif
+      const energyFormatted = formatEnergyAdaptive(totalEnergyJoules);
+      totalEnergyEl.textContent = energyFormatted.value;
       const subtitle = document.getElementById('total-energy-subtitle');
       if (subtitle) {
-        subtitle.textContent = `${(totalEnergyJoules / 1000).toFixed(1)} kJ`;
+        // Afficher aussi en Joules pour référence
+        subtitle.textContent = `${energyFormatted.unit} (${totalEnergyJoules.toFixed(1)} J)`;
+      }
+      // Mettre à jour l'unité dans le label si présent
+      const totalEnergyUnitEl = document.querySelector('#total-energy').nextElementSibling;
+      if (totalEnergyUnitEl && totalEnergyUnitEl.classList.contains('unit')) {
+        totalEnergyUnitEl.textContent = energyFormatted.unit;
       }
     }
     if (totalCO2El) {
-      totalCO2El.textContent = (totalCO2 / 1000).toFixed(2);
+      const totalCO2Kg = totalCO2 / 1000;
+      // Si très petit (< 0.01 kg), afficher avec plus de décimales ou en grammes
+      if (totalCO2Kg < 0.01 && totalCO2Kg > 0) {
+        // Afficher avec 4 décimales pour les très petites valeurs
+        totalCO2El.textContent = totalCO2Kg.toFixed(4);
+      } else if (totalCO2Kg >= 0.01) {
+        // Afficher avec 2 décimales pour les valeurs normales
+        totalCO2El.textContent = totalCO2Kg.toFixed(2);
+      } else {
+        // Si 0, afficher 0.00
+        totalCO2El.textContent = '0.00';
+      }
       const subtitle = document.getElementById('total-co2-subtitle');
       if (subtitle) {
+        // Toujours afficher en grammes dans le sous-titre
         subtitle.textContent = `${totalCO2.toFixed(0)} g`;
       }
     }
     if (annualPredictionEl) {
-      annualPredictionEl.textContent = annualEnergyKwh.toFixed(2);
+      // Utiliser le formatage adaptatif pour l'énergie annuelle
+      const annualEnergyJoules = annualEnergyKwh * 3600000;
+      const annualFormatted = formatEnergyAdaptive(annualEnergyJoules);
+      annualPredictionEl.textContent = annualFormatted.value;
       const subtitle = document.getElementById('annual-prediction-subtitle');
       if (subtitle) {
-        subtitle.textContent = `~${(annualEnergyKwh * 0.48).toFixed(2)} kg CO₂/an`;
+        // Calculer le CO₂ depuis l'énergie annuelle avec l'intensité carbone globale
+        const globalIntensityForAnnual = carbonIntensityData?.countries?.global_average?.intensity || 480;
+        const co2Grams = annualEnergyKwh * globalIntensityForAnnual;
+        const co2Kg = co2Grams / 1000;
+        // Afficher avec plus de décimales si très petit
+        if (co2Kg < 0.01 && co2Kg > 0) {
+          subtitle.textContent = `${annualFormatted.unit}/an (~${co2Kg.toFixed(4)} kg CO₂/an)`;
+        } else {
+          subtitle.textContent = `${annualFormatted.unit}/an (~${co2Kg.toFixed(2)} kg CO₂/an)`;
+        }
+      }
+      // Mettre à jour l'unité dans le label si présent
+      const annualUnitEl = document.querySelector('#annual-prediction-energy').nextElementSibling;
+      if (annualUnitEl && annualUnitEl.classList.contains('unit')) {
+        annualUnitEl.textContent = `${annualFormatted.unit}/an`;
       }
     }
     
@@ -1786,10 +2214,27 @@ async function loadOverview() {
     const collectionPeriodEl = document.getElementById('collection-period');
     
     if (monthlyEnergyEl) {
-      monthlyEnergyEl.textContent = monthlyEnergyKwh.toFixed(3);
+      // Utiliser le formatage adaptatif pour l'énergie mensuelle
+      const monthlyEnergyJoules = monthlyEnergyKwh * 3600000;
+      const monthlyFormatted = formatEnergyAdaptive(monthlyEnergyJoules);
+      monthlyEnergyEl.textContent = monthlyFormatted.value;
       const subtitle = document.getElementById('monthly-energy-subtitle');
       if (subtitle) {
-        subtitle.textContent = `~${(monthlyEnergyKwh * 0.48).toFixed(2)} kg CO₂/mois`;
+        // Calculer le CO₂ depuis l'énergie mensuelle avec l'intensité carbone globale
+        const globalIntensityForMonthly = carbonIntensityData?.countries?.global_average?.intensity || 480;
+        const co2Grams = monthlyEnergyKwh * globalIntensityForMonthly;
+        const co2Kg = co2Grams / 1000;
+        // Afficher avec plus de décimales si très petit
+        if (co2Kg < 0.01 && co2Kg > 0) {
+          subtitle.textContent = `${monthlyFormatted.unit}/mois (~${co2Kg.toFixed(4)} kg CO₂/mois)`;
+        } else {
+          subtitle.textContent = `${monthlyFormatted.unit}/mois (~${co2Kg.toFixed(2)} kg CO₂/mois)`;
+        }
+      }
+      // Mettre à jour l'unité dans le label si présent
+      const monthlyUnitEl = document.querySelector('#monthly-energy').nextElementSibling;
+      if (monthlyUnitEl && monthlyUnitEl.classList.contains('unit')) {
+        monthlyUnitEl.textContent = `${monthlyFormatted.unit}/mois`;
       }
     }
     if (totalTokensEl) {
@@ -1800,8 +2245,23 @@ async function loadOverview() {
       }
     }
     if (avgEnergyEl) {
-      avgEnergyEl.textContent = avgEnergyPerExchange.toFixed(6);
+      // Utiliser le formatage adaptatif pour l'énergie moyenne
+      const avgEnergyFormatted = formatEnergyAdaptive(avgEnergyPerExchangeJoules);
+      avgEnergyEl.textContent = avgEnergyFormatted.value;
       const subtitle = document.getElementById('avg-energy-subtitle');
+      if (subtitle) {
+        subtitle.textContent = `${avgEnergyFormatted.unit} (${avgEnergyPerExchangeJoules.toFixed(2)} J)`;
+      }
+      // Mettre à jour l'unité dans le label si présent
+      const avgEnergyLabel = document.querySelector('[for="avg-energy"]');
+      if (avgEnergyLabel && avgEnergyLabel.textContent.includes('kWh')) {
+        avgEnergyLabel.textContent = avgEnergyLabel.textContent.replace('kWh', avgEnergyFormatted.unit);
+      }
+    }
+    const avgTokensEl = document.getElementById('avg-tokens-per-exchange');
+    if (avgTokensEl) {
+      avgTokensEl.textContent = avgTokensPerExchange.toFixed(0);
+      const subtitle = document.getElementById('avg-tokens-subtitle');
       if (subtitle) {
         subtitle.textContent = `~${avgTokensPerExchange.toFixed(0)} tokens/échange`;
       }
@@ -1857,7 +2317,8 @@ function displayPlatformStats(platformStats, totalMeasures, totalEnergyKwh, tota
   
   platformStatsEl.innerHTML = platforms.map(platform => {
     const stats = platformStats[platform];
-    const energyKwh = stats.energy / 3600000;
+    const energyJoules = stats.energy;
+    const energyKwh = energyJoules / 3600000;
     const percentage = totalMeasures > 0 ? (stats.count / totalMeasures * 100).toFixed(1) : 0;
     const energyPercentage = totalEnergyKwh > 0 ? (energyKwh / totalEnergyKwh * 100).toFixed(1) : 0;
     
@@ -1868,7 +2329,7 @@ function displayPlatformStats(platformStats, totalMeasures, totalEnergyKwh, tota
           <strong>Échanges:</strong> ${stats.count.toLocaleString()} (${percentage}%)
         </div>
         <div style="margin-bottom: 10px;">
-          <strong>Énergie:</strong> ${energyKwh.toFixed(4)} kWh (${energyPercentage}%)
+          <strong>Énergie:</strong> ${formatEnergyAdaptive(energyJoules).display} (${energyPercentage}%)
         </div>
         <div style="margin-bottom: 10px;">
           <strong>Tokens:</strong> ${stats.tokens.toLocaleString()}
@@ -1897,10 +2358,11 @@ function displayModelStats(modelStats, totalMeasures, totalEnergyKwh, totalCO2kg
   
   modelStatsEl.innerHTML = models.map(model => {
     const stats = modelStats[model];
-    const energyKwh = stats.energy / 3600000;
+    const energyJoules = stats.energy;
+    const energyKwh = energyJoules / 3600000;
     const percentage = totalMeasures > 0 ? (stats.count / totalMeasures * 100).toFixed(1) : 0;
     const energyPercentage = totalEnergyKwh > 0 ? (energyKwh / totalEnergyKwh * 100).toFixed(1) : 0;
-    const avgEnergyPerExchange = stats.count > 0 ? energyKwh / stats.count : 0;
+    const avgEnergyPerExchangeJoules = stats.count > 0 ? energyJoules / stats.count : 0;
     
     return `
       <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #764ba2;">
@@ -1909,10 +2371,10 @@ function displayModelStats(modelStats, totalMeasures, totalEnergyKwh, totalCO2kg
           <strong>Échanges:</strong> ${stats.count.toLocaleString()} (${percentage}%)
         </div>
         <div style="margin-bottom: 10px;">
-          <strong>Énergie:</strong> ${energyKwh.toFixed(4)} kWh (${energyPercentage}%)
+          <strong>Énergie:</strong> ${formatEnergyAdaptive(energyJoules).display} (${energyPercentage}%)
         </div>
         <div style="margin-bottom: 10px;">
-          <strong>Énergie/échange:</strong> ${avgEnergyPerExchange.toFixed(6)} kWh
+          <strong>Énergie/échange:</strong> ${formatEnergyAdaptive(avgEnergyPerExchangeJoules).display}
         </div>
         <div style="margin-bottom: 10px;">
           <strong>Tokens:</strong> ${stats.tokens.toLocaleString()}
@@ -2423,6 +2885,25 @@ async function getPredictionMode() {
 }
 
 /**
+ * Configurer l'écouteur de messages du background
+ */
+function setupMessageListener() {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'UPDATE_PREDICTIONS') {
+      console.log('🔄 Message UPDATE_PREDICTIONS reçu, mise à jour des prédictions...');
+      // Recharger les données avec les nouvelles prédictions
+      loadOverview().then(() => {
+        console.log('✅ Prédictions mises à jour');
+      }).catch(error => {
+        console.error('❌ Erreur mise à jour prédictions:', error);
+      });
+      sendResponse({ success: true });
+      return true;
+    }
+  });
+}
+
+/**
  * Configurer les mises à jour en temps réel du dashboard
  */
 function setupRealtimeUpdates() {
@@ -2433,6 +2914,20 @@ function setupRealtimeUpdates() {
     // Si conversationHistory ou currentSession change, mettre à jour l'affichage
     if (changes.conversationHistory || changes.currentSession || changes.totalStats) {
       const activeTab = document.querySelector('.tab-content.active');
+      
+      // Si une mise à jour des prédictions est nécessaire, la déclencher
+      if (changes.predictionsNeedUpdate && changes.predictionsNeedUpdate.newValue === true) {
+        console.log('🔄 Mise à jour automatique des prédictions déclenchée');
+        // Réinitialiser le flag
+        chrome.storage.local.set({ predictionsNeedUpdate: false });
+        // Recharger les données et recalculer les prédictions
+        if (activeTab && activeTab.id === 'overview-tab') {
+          loadOverview();
+        } else {
+          // Si on n'est pas sur l'onglet overview, recharger quand même les données
+          loadOverview();
+        }
+      }
       if (activeTab) {
         const tabId = activeTab.id;
         

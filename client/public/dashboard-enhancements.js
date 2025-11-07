@@ -86,23 +86,165 @@ async function loadConsumptionTrendChart() {
   const ctx = document.getElementById('chart-consumption-trend');
   if (!ctx || !datasetData || datasetData.length === 0) return;
   
-  // Grouper par jour
-  const byDay = {};
-  datasetData.forEach(row => {
-    const date = new Date(row.timestamp || Date.now());
-    const dayKey = date.toISOString().split('T')[0];
-    if (!byDay[dayKey]) {
-      byDay[dayKey] = { energy: 0, count: 0, exchanges: [] };
-    }
-    const energy = parseFloat(row.energy_consumption_llm_total) || 0;
-    byDay[dayKey].energy += energy;
-    byDay[dayKey].count++;
-    byDay[dayKey].exchanges.push(row);
-  });
+  // Déterminer si on doit grouper par jour ou par mois
+  // Si on a plus de 60 jours de données, grouper par mois pour mieux voir les fluctuations
+  const timestamps = datasetData.map(row => row.timestamp || Date.now()).filter(Boolean);
+  const minTimestamp = Math.min(...timestamps);
+  const maxTimestamp = Math.max(...timestamps);
+  const daysDiff = (maxTimestamp - minTimestamp) / (1000 * 60 * 60 * 24);
+  const groupByMonth = daysDiff > 60; // Grouper par mois si plus de 60 jours
   
-  const sortedDays = Object.keys(byDay).sort();
-  const historicalLabels = sortedDays.map(d => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }));
-  const historicalData = sortedDays.map(d => parseFloat((byDay[d].energy / 3600000).toFixed(6))); // Convertir en kWh
+  console.log('📊 Groupement données:', { daysDiff, groupByMonth, dataLength: datasetData.length });
+  
+  let groupedData = {};
+  let historicalLabels = [];
+  let historicalData = [];
+  
+  if (groupByMonth) {
+    // Grouper par mois
+    datasetData.forEach(row => {
+      // Normaliser le timestamp
+      let timestamp = row.timestamp;
+      if (typeof timestamp === 'string') {
+        timestamp = parseInt(timestamp);
+      }
+      if (!timestamp || isNaN(timestamp)) {
+        timestamp = Date.now();
+      }
+      
+      const date = new Date(timestamp);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!groupedData[monthKey]) {
+        groupedData[monthKey] = { energy: 0, count: 0, exchanges: [] };
+      }
+      const energy = parseFloat(row.energy_consumption_llm_total) || 0;
+      groupedData[monthKey].energy += energy;
+      groupedData[monthKey].count++;
+      groupedData[monthKey].exchanges.push(row);
+    });
+    
+    console.log('📊 Groupement par mois:', {
+      totalMonths: Object.keys(groupedData).length,
+      months: Object.keys(groupedData).sort(),
+      energyByMonth: Object.keys(groupedData).sort().map(m => ({
+        month: m,
+        energy: groupedData[m].energy,
+        energyKwh: (groupedData[m].energy / 3600000).toExponential(3),
+        count: groupedData[m].count
+      }))
+    });
+    
+    const sortedMonths = Object.keys(groupedData).sort();
+    historicalLabels = sortedMonths.map(m => {
+      const [year, month] = m.split('-');
+      const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+      return date.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' });
+    });
+    // Créer un tableau complet pour tous les mois de la période
+    const allMonthsInRange = [];
+    const startDate = new Date(Math.min(...timestamps));
+    const endDate = new Date(Math.max(...timestamps));
+    
+    let currentDate = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+    while (currentDate <= endDate) {
+      const monthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+      allMonthsInRange.push(monthKey);
+      currentDate.setMonth(currentDate.getMonth() + 1);
+    }
+    
+    historicalLabels = allMonthsInRange.map(m => {
+      const [year, month] = m.split('-');
+      const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+      return date.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' });
+    });
+    
+    historicalData = allMonthsInRange.map(m => {
+      if (groupedData[m]) {
+        const energyJoules = groupedData[m].energy;
+        const energyKwh = energyJoules / 3600000;
+        return energyKwh;
+      } else {
+        // Mois sans données : retourner null pour l'afficher comme une lacune
+        return null;
+      }
+    });
+  } else {
+    // Grouper par jour
+    datasetData.forEach(row => {
+      // Normaliser le timestamp
+      let timestamp = row.timestamp;
+      if (typeof timestamp === 'string') {
+        timestamp = parseInt(timestamp);
+      }
+      if (!timestamp || isNaN(timestamp)) {
+        timestamp = Date.now();
+      }
+      
+      const date = new Date(timestamp);
+      const dayKey = date.toISOString().split('T')[0];
+      if (!groupedData[dayKey]) {
+        groupedData[dayKey] = { energy: 0, count: 0, exchanges: [] };
+      }
+      const energy = parseFloat(row.energy_consumption_llm_total) || 0;
+      groupedData[dayKey].energy += energy;
+      groupedData[dayKey].count++;
+      groupedData[dayKey].exchanges.push(row);
+    });
+    
+    console.log('📊 Groupement par jour:', {
+      totalDays: Object.keys(groupedData).length,
+      sampleDays: Object.keys(groupedData).sort().slice(0, 10),
+      energyByDay: Object.keys(groupedData).sort().slice(0, 10).map(d => ({
+        day: d,
+        energy: groupedData[d].energy,
+        energyKwh: (groupedData[d].energy / 3600000).toExponential(3),
+        count: groupedData[d].count
+      }))
+    });
+    
+    const sortedDays = Object.keys(groupedData).sort();
+    // Créer un tableau complet pour tous les jours de la période
+    const allDaysInRange = [];
+    const startDate = new Date(Math.min(...timestamps));
+    const endDate = new Date(Math.max(...timestamps));
+    
+    let currentDate = new Date(startDate);
+    currentDate.setHours(0, 0, 0, 0);
+    while (currentDate <= endDate) {
+      const dayKey = currentDate.toISOString().split('T')[0];
+      allDaysInRange.push(dayKey);
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    historicalLabels = allDaysInRange.map(d => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }));
+    historicalData = allDaysInRange.map(d => {
+      if (groupedData[d]) {
+        const energyJoules = groupedData[d].energy;
+        const energyKwh = energyJoules / 3600000;
+        return energyKwh;
+      } else {
+        // Jour sans données : retourner null pour l'afficher comme une lacune
+        return null;
+      }
+    });
+  }
+  
+  // Calculer les stats AVANT le filtrage pour le debug
+  const rawMaxEnergy = historicalData.length > 0 ? Math.max(...historicalData) : 0;
+  const rawMinEnergy = historicalData.length > 0 ? Math.min(...historicalData.filter(d => d > 0)) : 0;
+  
+  console.log('📊 Données groupées:', {
+    labelsCount: historicalLabels.length,
+    dataCount: historicalData.length,
+    sampleData: historicalData.slice(0, 5),
+    sampleDataRaw: historicalData.slice(0, 5).map(d => d.toExponential(3)),
+    totalEnergy: historicalData.reduce((a, b) => a + b, 0),
+    totalEnergyRaw: historicalData.reduce((a, b) => a + b, 0).toExponential(3),
+    maxEnergy: rawMaxEnergy,
+    maxEnergyRaw: rawMaxEnergy.toExponential(3),
+    minEnergy: rawMinEnergy || 0,
+    minEnergyRaw: rawMinEnergy ? rawMinEnergy.toExponential(3) : '0'
+  });
   
   // Calculer les statistiques pour les prédictions
   const avgDailyEnergy = historicalData.length > 0 
@@ -112,19 +254,44 @@ async function loadConsumptionTrendChart() {
     ? Math.sqrt(historicalData.reduce((sum, val) => sum + Math.pow(val - avgDailyEnergy, 2), 0) / (historicalData.length - 1))
     : avgDailyEnergy * 0.3; // Estimation si pas assez de données
   
-  // Générer des prédictions pour les 30 prochains jours
+  // Générer des prédictions pour les prochains jours/mois selon le groupement
   const today = new Date();
-  const predictionDays = 30;
+  const predictionPeriods = groupByMonth ? 12 : 30; // 12 mois ou 30 jours
   const predictionLabels = [];
   const predictionData = [];
   const predictionUpper = [];
   const predictionLower = [];
   
-  // Scénarios de projets
+  // Scénarios de projets - basés sur les données historiques réelles
+  // Les scénarios génèrent des prédictions qui suivent les patterns historiques avec des variations
   const scenarios = {
-    conservative: { multiplier: 0.8, volatility: 0.15, name: 'Projet Modéré' },
-    normal: { multiplier: 1.0, volatility: 0.25, name: 'Projet Normal' },
-    intensive: { multiplier: 1.5, volatility: 0.35, name: 'Projet Intensif' }
+    conservative: { 
+      name: 'Projet Modéré',
+      // Réduction de 20% par rapport à la moyenne historique
+      trendMultiplier: 0.8,
+      // Variations plus faibles
+      volatilityMultiplier: 0.7,
+      // Variation aléatoire réduite
+      randomVariation: 0.15
+    },
+    normal: { 
+      name: 'Projet Normal',
+      // Même niveau que la moyenne historique
+      trendMultiplier: 1.0,
+      // Variations normales
+      volatilityMultiplier: 1.0,
+      // Variation aléatoire normale
+      randomVariation: 0.25
+    },
+    intensive: { 
+      name: 'Projet Intensif',
+      // Augmentation de 30% par rapport à la moyenne historique
+      trendMultiplier: 1.3,
+      // Variations plus importantes
+      volatilityMultiplier: 1.2,
+      // Variation aléatoire plus importante
+      randomVariation: 0.35
+    }
   };
   
   // Obtenir le scénario sélectionné depuis le sélecteur
@@ -132,47 +299,256 @@ async function loadConsumptionTrendChart() {
   const scenarioKey = scenarioSelect ? scenarioSelect.value : 'normal';
   const selectedScenario = scenarios[scenarioKey] || scenarios.normal;
   
-  // Calculer la tendance (linéaire simple)
+  // Calculer la tendance basée sur les données historiques réelles
   let trend = 0;
+  let historicalPattern = [];
+  
   if (historicalData.length >= 2) {
+    // Calculer la tendance linéaire
     const firstHalf = historicalData.slice(0, Math.floor(historicalData.length / 2));
     const secondHalf = historicalData.slice(Math.floor(historicalData.length / 2));
-    const avgFirst = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-    const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-    trend = (avgSecond - avgFirst) / firstHalf.length; // Tendance par jour
+    const avgFirst = firstHalf.length > 0 ? firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length : avgDailyEnergy;
+    const avgSecond = secondHalf.length > 0 ? secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length : avgDailyEnergy;
+    trend = (avgSecond - avgFirst) / Math.max(1, firstHalf.length); // Tendance par période
+    
+    // Créer un pattern basé sur les variations historiques
+    historicalPattern = historicalData.map((val, idx) => {
+      const relativeValue = avgDailyEnergy > 0 ? val / avgDailyEnergy : 1;
+      return relativeValue;
+    });
+  } else {
+    // Si pas assez de données, utiliser un pattern constant
+    historicalPattern = [1.0];
   }
   
-  // Base de prédiction avec tendance
-  let basePrediction = avgDailyEnergy;
+  // Base de prédiction : utiliser la moyenne historique réelle (pas de multiplication excessive)
+  let basePrediction = avgDailyEnergy * selectedScenario.trendMultiplier;
   
-  // Générer les prédictions avec variabilité
-  for (let i = 1; i <= predictionDays; i++) {
-    const futureDate = new Date(today);
-    futureDate.setDate(today.getDate() + i);
-    predictionLabels.push(futureDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }));
+  // Si la moyenne est 0 ou très petite, utiliser une estimation basée sur les tokens si disponible
+  if (basePrediction === 0 || basePrediction < 0.000000001) {
+    // Essayer d'estimer à partir des données disponibles
+    if (datasetData && datasetData.length > 0) {
+      const totalTokens = datasetData.reduce((sum, d) => 
+        sum + (parseInt(d.prompt_token_length || 0) + parseInt(d.response_token_length || 0)), 0);
+      const avgTokensPerPeriod = totalTokens / Math.max(1, historicalData.length);
+      // Estimation: ~0.00001 Joules par token
+      basePrediction = (avgTokensPerPeriod * 0.00001) / 3600000; // Convertir en kWh
+      basePrediction = basePrediction * selectedScenario.trendMultiplier;
+    }
+  }
+  
+  console.log('📊 Calcul prédictions scénario:', {
+    scenario: selectedScenario.name,
+    avgDailyEnergy,
+    basePrediction,
+    trend,
+    stdDev,
+    historicalPatternLength: historicalPattern.length,
+    historicalPatternSample: historicalPattern.slice(0, 5)
+  });
+  
+  // Générer les prédictions avec variabilité basée sur les patterns historiques
+  for (let i = 1; i <= predictionPeriods; i++) {
+    let futureDate;
+    let label;
     
-    // Appliquer la tendance
-    basePrediction += trend * selectedScenario.multiplier;
+    if (groupByMonth) {
+      // Prédictions mensuelles
+      futureDate = new Date(today.getFullYear(), today.getMonth() + i, 1);
+      label = futureDate.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' });
+      // Pour les prédictions mensuelles, utiliser la moyenne mensuelle historique
+      basePrediction = avgDailyEnergy * 30 * selectedScenario.trendMultiplier;
+    } else {
+      // Prédictions quotidiennes
+      futureDate = new Date(today);
+      futureDate.setDate(today.getDate() + i);
+      label = futureDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+      // Appliquer la tendance avec le multiplicateur du scénario
+      basePrediction += trend * selectedScenario.trendMultiplier;
+    }
+    
+    predictionLabels.push(label);
+    
+    // Utiliser le pattern historique pour générer des variations réalistes
+    // Si on a un pattern historique, l'utiliser de manière cyclique
+    let patternMultiplier = 1.0;
+    if (historicalPattern.length > 0) {
+      const patternIndex = (i - 1) % historicalPattern.length;
+      patternMultiplier = historicalPattern[patternIndex] || 1.0;
+    }
+    
+    // Ajouter des variations saisonnières pour plus de réalisme
+    let seasonalMultiplier = 1.0;
+    if (groupByMonth) {
+      // Variations saisonnières mensuelles (plus en hiver, moins en été)
+      const monthIndex = futureDate.getMonth();
+      const seasonalPattern = [
+        1.2, // Janvier (hiver)
+        1.1, // Février
+        1.0, // Mars
+        0.9, // Avril
+        0.8, // Mai
+        0.7, // Juin (été)
+        0.6, // Juillet
+        0.7, // Août
+        0.9, // Septembre
+        1.0, // Octobre
+        1.1, // Novembre
+        1.2  // Décembre
+      ];
+      seasonalMultiplier = seasonalPattern[monthIndex] || 1.0;
+    } else {
+      // Variations saisonnières quotidiennes (plus subtiles)
+      const dayOfYear = Math.floor((futureDate - new Date(futureDate.getFullYear(), 0, 0)) / 1000 / 60 / 60 / 24);
+      // Sinusoïde pour créer des variations saisonnières
+      seasonalMultiplier = 1.0 + 0.3 * Math.sin((dayOfYear / 365) * 2 * Math.PI - Math.PI / 2); // Minimum en été, maximum en hiver
+    }
     
     // Ajouter de la variabilité aléatoire (distribution normale approximative)
-    const randomFactor = (Math.random() + Math.random() + Math.random() + Math.random() - 2) / 2; // Centré sur 0, variance ~0.33
-    const volatility = stdDev * selectedScenario.volatility;
-    const predictedValue = Math.max(0, basePrediction + randomFactor * volatility);
+    // Utiliser plusieurs sources de variation pour plus de réalisme
+    const randomFactor1 = (Math.random() + Math.random() + Math.random() + Math.random() - 2) / 2; // Centré sur 0
+    const randomFactor2 = (Math.random() + Math.random() - 1); // Autre source de variation
+    const combinedRandomFactor = (randomFactor1 * 0.7 + randomFactor2 * 0.3); // Combiner les deux
+    
+    // Utiliser la volatilité historique réelle, ajustée par le scénario
+    const volatility = stdDev * selectedScenario.volatilityMultiplier * (groupByMonth ? 30 : 1);
+    
+    // Variation aléatoire basée sur la volatilité historique
+    const volatilityVariation = combinedRandomFactor * volatility;
+    
+    // Variation aléatoire supplémentaire pour plus de fluctuations
+    const randomVariation = combinedRandomFactor * selectedScenario.randomVariation * (groupByMonth ? avgDailyEnergy * 30 : avgDailyEnergy);
+    
+    // Variation cyclique pour simuler des patterns hebdomadaires (si groupement par jour)
+    let weeklyVariation = 0;
+    if (!groupByMonth) {
+      const dayOfWeek = futureDate.getDay();
+      // Moins d'activité le weekend
+      const weeklyPattern = [1.0, 1.1, 1.1, 1.1, 1.1, 0.8, 0.7]; // Dimanche à Samedi
+      weeklyVariation = (weeklyPattern[dayOfWeek] - 1.0) * avgDailyEnergy * 0.2;
+    }
+    
+    // Prédiction = base * pattern historique * saisonnier + variations aléatoires + variation hebdomadaire
+    const predictedValue = Math.max(0, 
+      basePrediction * patternMultiplier * seasonalMultiplier + 
+      volatilityVariation + 
+      randomVariation + 
+      weeklyVariation
+    );
     
     predictionData.push(parseFloat(predictedValue.toFixed(6)));
     
     // Calculer les bornes de confiance (intervalle de confiance à 80%)
-    const confidenceInterval = 1.28 * volatility; // Z-score pour 80%
+    // Utiliser la volatilité réelle avec une marge plus large pour refléter les variations
+    const baseConfidenceInterval = 1.28 * volatility * selectedScenario.volatilityMultiplier;
+    // Ajouter une marge supplémentaire basée sur la variation aléatoire
+    const additionalMargin = Math.abs(randomVariation) * 0.5;
+    const confidenceInterval = baseConfidenceInterval + additionalMargin;
     predictionUpper.push(parseFloat((predictedValue + confidenceInterval).toFixed(6)));
-    predictionLower.push(parseFloat((predictedValue - confidenceInterval).toFixed(6)));
+    predictionLower.push(parseFloat(Math.max(0, predictedValue - confidenceInterval).toFixed(6)));
   }
+  
+  // Trouver le max et min pour adapter l'échelle du graphique
+  // Filtrer les valeurs null et prendre le max de toutes les données (historique + prédictions)
+  // Inclure aussi les valeurs 0 pour avoir une échelle complète
+  const allDataValues = [
+    ...historicalData.filter(d => d !== null && d !== undefined && !isNaN(d)),
+    ...predictionData.filter(d => d !== null && d !== undefined && !isNaN(d)),
+    ...predictionUpper.filter(d => d !== null && d !== undefined && !isNaN(d)),
+    ...predictionLower.filter(d => d !== null && d !== undefined && !isNaN(d))
+  ];
+  
+  const maxEnergy = allDataValues.length > 0 ? Math.max(...allDataValues) : 0;
+  const minEnergy = allDataValues.length > 0 ? Math.min(...allDataValues) : 0;
+  
+  // Calculer le max pour l'échelle : valeur max + 10%
+  // Utiliser les données réelles même si elles sont très petites
+  let scaleMax;
+  if (maxEnergy > 0) {
+    scaleMax = maxEnergy * 1.1;
+  } else if (rawMaxEnergy > 0) {
+    // Utiliser rawMaxEnergy si maxEnergy est 0 mais qu'on a des données
+    scaleMax = rawMaxEnergy * 1.1;
+  } else if (avgDailyEnergy > 0) {
+    scaleMax = avgDailyEnergy * 1.1;
+  } else {
+    // Si tout est vraiment à 0, utiliser une valeur très petite pour forcer l'utilisation de µWh ou nWh
+    // Cela permettra de voir les fluctuations même si les valeurs sont proches de 0
+    scaleMax = 0.0000000001; // 0.1 nWh - très petite valeur pour forcer nWh
+  }
+  
+  // S'assurer que scaleMax n'est jamais 0
+  if (scaleMax === 0 || isNaN(scaleMax)) {
+    scaleMax = 0.0000000001; // Forcer nWh si problème
+  }
+  
+  console.log('📊 Calcul échelle graphique:', {
+    maxEnergy,
+    minEnergy,
+    scaleMax,
+    avgDailyEnergy,
+    allDataValuesCount: allDataValues.length,
+    sampleValues: allDataValues.slice(0, 5)
+  });
+  
+  // Déterminer l'unité adaptée pour l'affichage (basée sur scaleMax pour avoir une bonne visibilité)
+  // Ajouter des unités plus petites pour les très petites valeurs (µWh, nWh)
+  let energyUnit = 'kWh';
+  let energyMultiplier = 1;
+  let energyLabel = 'Énergie (kWh)';
+  
+  console.log('🔍 Détermination unité pour scaleMax:', scaleMax);
+  
+  if (scaleMax >= 0.001) {
+    // >= 1 Wh : utiliser kWh
+    energyUnit = 'kWh';
+    energyMultiplier = 1;
+    energyLabel = 'Énergie (kWh)';
+  } else if (scaleMax >= 0.000001) {
+    // >= 1 mWh : utiliser Wh
+    energyUnit = 'Wh';
+    energyMultiplier = 1000;
+    energyLabel = 'Énergie (Wh)';
+  } else if (scaleMax >= 0.000000001) {
+    // >= 1 µWh : utiliser mWh
+    energyUnit = 'mWh';
+    energyMultiplier = 1000000;
+    energyLabel = 'Énergie (mWh)';
+  } else if (scaleMax >= 0.000000000001) {
+    // >= 1 nWh : utiliser µWh
+    energyUnit = 'µWh';
+    energyMultiplier = 1000000000;
+    energyLabel = 'Énergie (µWh)';
+  } else {
+    // < 1 nWh : utiliser nWh
+    energyUnit = 'nWh';
+    energyMultiplier = 1000000000000;
+    energyLabel = 'Énergie (nWh)';
+  }
+  
+  console.log('✅ Unité sélectionnée:', { energyUnit, energyMultiplier, energyLabel, scaleMax });
+  
+  console.log('📊 Adaptation échelle graphique:', {
+    maxEnergy,
+    minEnergy,
+    energyUnit,
+    energyMultiplier,
+    sampleHistorical: historicalData.slice(0, 3),
+    samplePrediction: predictionData.slice(0, 3)
+  });
   
   // Combiner historique et prédictions
   const allLabels = [...historicalLabels, ...predictionLabels];
-  const allHistoricalData = [...historicalData, ...new Array(predictionDays).fill(null)];
+  const allHistoricalData = [...historicalData, ...new Array(predictionPeriods).fill(null)];
   const allPredictionData = [...new Array(historicalLabels.length).fill(null), ...predictionData];
   const allPredictionUpper = [...new Array(historicalLabels.length).fill(null), ...predictionUpper];
   const allPredictionLower = [...new Array(historicalLabels.length).fill(null), ...predictionLower];
+  
+  // Mettre à l'échelle toutes les données pour l'affichage
+  const allHistoricalDataScaled = allHistoricalData.map(d => d !== null ? d * energyMultiplier : null);
+  const allPredictionDataScaled = allPredictionData.map(d => d !== null ? d * energyMultiplier : null);
+  const allPredictionUpperScaled = allPredictionUpper.map(d => d !== null ? d * energyMultiplier : null);
+  const allPredictionLowerScaled = allPredictionLower.map(d => d !== null ? d * energyMultiplier : null);
   
   if (charts['consumption-trend']) {
     charts['consumption-trend'].destroy();
@@ -185,7 +561,7 @@ async function loadConsumptionTrendChart() {
       datasets: [
         {
           label: 'Consommation Historique',
-          data: allHistoricalData,
+          data: allHistoricalDataScaled,
           borderColor: '#667eea',
           backgroundColor: 'rgba(102, 126, 234, 0.1)',
           tension: 0.4,
@@ -195,7 +571,7 @@ async function loadConsumptionTrendChart() {
         },
         {
           label: 'Prédiction (Scénario: ' + selectedScenario.name + ')',
-          data: allPredictionData,
+          data: allPredictionDataScaled,
           borderColor: '#FF9800',
           backgroundColor: 'rgba(255, 152, 0, 0.1)',
           borderDash: [5, 5],
@@ -206,7 +582,7 @@ async function loadConsumptionTrendChart() {
         },
         {
           label: 'Borne Supérieure (80% confiance)',
-          data: allPredictionUpper,
+          data: allPredictionUpperScaled,
           borderColor: 'rgba(255, 152, 0, 0.3)',
           backgroundColor: 'rgba(255, 152, 0, 0.05)',
           borderDash: [2, 2],
@@ -217,7 +593,7 @@ async function loadConsumptionTrendChart() {
         },
         {
           label: 'Borne Inférieure (80% confiance)',
-          data: allPredictionLower,
+          data: allPredictionLowerScaled,
           borderColor: 'rgba(255, 152, 0, 0.3)',
           backgroundColor: 'rgba(255, 152, 0, 0.05)',
           borderDash: [2, 2],
@@ -248,7 +624,13 @@ async function loadConsumptionTrendChart() {
                 label += ': ';
               }
               if (context.parsed.y !== null) {
-                label += context.parsed.y.toFixed(4) + ' kWh';
+                // Convertir de l'unité affichée vers kWh pour le tooltip
+                const valueInKwh = context.parsed.y / energyMultiplier;
+                label += context.parsed.y.toFixed(4) + ' ' + energyUnit;
+                // Afficher aussi en kWh si différent
+                if (energyUnit !== 'kWh') {
+                  label += ` (${valueInKwh.toFixed(6)} kWh)`;
+                }
               }
               return label;
             }
@@ -260,7 +642,14 @@ async function loadConsumptionTrendChart() {
           beginAtZero: true,
           title: {
             display: true,
-            text: 'Énergie (kWh)'
+            text: energyLabel
+          },
+          // Adapter l'échelle selon les données : max réel + 10%
+          suggestedMax: scaleMax * energyMultiplier,
+          ticks: {
+            callback: function(value) {
+              return value.toFixed(4) + ' ' + energyUnit;
+            }
           }
         },
         x: {
@@ -305,17 +694,112 @@ async function loadConsumptionTrendChart() {
  */
 function loadLongTermPredictionChart(monthlyEnergyKwh) {
   const ctx = document.getElementById('chart-long-term-prediction');
-  if (!ctx) return;
+  if (!ctx || !datasetData || datasetData.length === 0) return;
   
+  // Grouper les données historiques par mois pour calculer les variations
+  const byMonth = {};
+  datasetData.forEach(row => {
+    const date = new Date(row.timestamp || Date.now());
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!byMonth[monthKey]) {
+      byMonth[monthKey] = { energy: 0, count: 0 };
+    }
+    const energy = parseFloat(row.energy_consumption_llm_total) || 0;
+    byMonth[monthKey].energy += energy;
+    byMonth[monthKey].count++;
+  });
+  
+  // Calculer la moyenne mensuelle historique
+  const sortedMonths = Object.keys(byMonth).sort();
+  const historicalMonthly = sortedMonths.map(m => byMonth[m].energy / 3600000); // Convertir en kWh
+  const avgHistoricalMonthly = historicalMonthly.length > 0 
+    ? historicalMonthly.reduce((a, b) => a + b, 0) / historicalMonthly.length 
+    : monthlyEnergyKwh;
+  
+  // Calculer les variations mensuelles (multiplicateurs par rapport à la moyenne)
+  const monthlyMultipliers = historicalMonthly.map(val => val / avgHistoricalMonthly || 1);
+  
+  // Générer les prédictions pour les 12 prochains mois avec variations
   const months = [];
   const predicted = [];
   const currentMonth = new Date();
   
+  // Utiliser les variations historiques pour projeter les prédictions
   for (let i = 0; i < 12; i++) {
     const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + i, 1);
     months.push(date.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }));
-    predicted.push(monthlyEnergyKwh);
+    
+    // Appliquer un multiplicateur basé sur les variations historiques
+    // Utiliser un pattern cyclique si on a des données historiques
+    let multiplier = 1;
+    if (monthlyMultipliers.length > 0) {
+      // Utiliser le multiplicateur du même mois de l'année précédente si disponible
+      const monthIndex = date.getMonth();
+      const historicalMonthIndex = monthIndex % monthlyMultipliers.length;
+      multiplier = monthlyMultipliers[historicalMonthIndex] || 1;
+      
+      // Ajouter une petite variation aléatoire pour plus de réalisme
+      multiplier += (Math.random() - 0.5) * 0.2; // Variation de ±10%
+      multiplier = Math.max(0.5, Math.min(1.5, multiplier)); // Limiter entre 0.5 et 1.5
+    }
+    
+    predicted.push(monthlyEnergyKwh * multiplier);
   }
+  
+  console.log('📊 Prédictions long terme:', {
+    avgHistoricalMonthly,
+    monthlyEnergyKwh,
+    monthlyMultipliers: monthlyMultipliers.slice(0, 5),
+    predicted: predicted.slice(0, 5),
+    maxPredicted: Math.max(...predicted, 0)
+  });
+  
+  // Déterminer l'unité adaptée pour l'affichage
+  const maxPredicted = Math.max(...predicted, 0);
+  // Calculer le max pour l'échelle : valeur max + 10%
+  const scaleMax = maxPredicted > 0 ? maxPredicted * 1.1 : (monthlyEnergyKwh > 0 ? monthlyEnergyKwh * 1.1 : 0.001);
+  
+  let energyUnit = 'kWh';
+  let energyMultiplier = 1;
+  let energyLabel = 'Énergie (kWh)';
+  
+  if (scaleMax >= 0.001) {
+    // >= 1 Wh : utiliser kWh
+    energyUnit = 'kWh';
+    energyMultiplier = 1;
+    energyLabel = 'Énergie (kWh)';
+  } else if (scaleMax >= 0.000001) {
+    // >= 1 mWh : utiliser Wh
+    energyUnit = 'Wh';
+    energyMultiplier = 1000;
+    energyLabel = 'Énergie (Wh)';
+  } else if (scaleMax >= 0.000000001) {
+    // >= 1 µWh : utiliser mWh
+    energyUnit = 'mWh';
+    energyMultiplier = 1000000;
+    energyLabel = 'Énergie (mWh)';
+  } else if (scaleMax >= 0.000000000001) {
+    // >= 1 nWh : utiliser µWh
+    energyUnit = 'µWh';
+    energyMultiplier = 1000000000;
+    energyLabel = 'Énergie (µWh)';
+  } else {
+    // < 1 nWh : utiliser nWh
+    energyUnit = 'nWh';
+    energyMultiplier = 1000000000000;
+    energyLabel = 'Énergie (nWh)';
+  }
+  
+  console.log('📊 Calcul échelle prédiction long terme:', {
+    maxPredicted,
+    scaleMax,
+    monthlyEnergyKwh,
+    energyUnit,
+    energyMultiplier
+  });
+  
+  // Convertir les prédictions pour l'affichage
+  const predictedScaled = predicted.map(p => p * energyMultiplier);
   
   if (charts['long-term-prediction']) {
     charts['long-term-prediction'].destroy();
@@ -326,8 +810,8 @@ function loadLongTermPredictionChart(monthlyEnergyKwh) {
     data: {
       labels: months,
       datasets: [{
-        label: 'Prédiction (kWh)',
-        data: predicted,
+        label: `Prédiction (${energyUnit})`,
+        data: predictedScaled,
         backgroundColor: 'rgba(102, 126, 234, 0.8)',
         borderColor: '#667eea',
         borderWidth: 1
@@ -336,12 +820,36 @@ function loadLongTermPredictionChart(monthlyEnergyKwh) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: function(context) {
+              const valueInKwh = context.parsed.y / energyMultiplier;
+              let label = context.dataset.label || '';
+              if (label) {
+                label += ': ';
+              }
+              label += context.parsed.y.toFixed(4) + ' ' + energyUnit;
+              if (energyUnit !== 'kWh') {
+                label += ` (${valueInKwh.toFixed(6)} kWh)`;
+              }
+              return label;
+            }
+          }
+        }
+      },
       scales: {
         y: {
           beginAtZero: true,
           title: {
             display: true,
-            text: 'Énergie (kWh)'
+            text: energyLabel
+          },
+          suggestedMax: scaleMax * energyMultiplier, // max réel + 10%
+          ticks: {
+            callback: function(value) {
+              return value.toFixed(4) + ' ' + energyUnit;
+            }
           }
         }
       }

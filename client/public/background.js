@@ -843,6 +843,242 @@ async function resetCurrentSession() {
 }
 
 /**
+ * Simuler des données d'utilisation sur une période d'un an
+ */
+async function simulateOneYearData() {
+  try {
+    console.log('🎲 Démarrage simulation données 1 an...');
+    
+    // Récupérer l'historique existant
+    const result = await chrome.storage.local.get(['conversationHistory', 'totalStats']);
+    const existingHistory = result.conversationHistory || [];
+    const existingTotalStats = result.totalStats || {
+      requests: 0,
+      promptTokens: 0,
+      responseTokens: 0,
+      energyJoules: 0,
+      co2Grams: 0
+    };
+    
+    // Modèles disponibles avec leurs caractéristiques
+    // Valeurs d'énergie plus réalistes (en Joules)
+    // GPT-4 : ~2-5 Joules par requête moyenne, ~0.01-0.02 Joules par token de réponse
+    // GPT-3.5 : ~0.5-1 Joule par requête moyenne, ~0.002-0.005 Joules par token de réponse
+    const models = [
+      { name: 'gpt-4', baseEnergy: 2.0, perToken: 0.015, weight: 0.3 }, // ~2J base + 0.015J/token réponse
+      { name: 'gpt-4-turbo', baseEnergy: 1.5, perToken: 0.012, weight: 0.2 },
+      { name: 'gpt-3.5-turbo', baseEnergy: 0.5, perToken: 0.003, weight: 0.3 },
+      { name: 'claude-3-opus', baseEnergy: 3.0, perToken: 0.018, weight: 0.1 },
+      { name: 'claude-3-sonnet', baseEnergy: 1.2, perToken: 0.010, weight: 0.05 },
+      { name: 'gemini-pro', baseEnergy: 0.8, perToken: 0.008, weight: 0.05 }
+    ];
+    
+    const platforms = ['ChatGPT', 'Claude', 'Gemini'];
+    
+    // Fonction pour sélectionner un modèle aléatoirement selon les poids
+    function getRandomModel() {
+      const rand = Math.random();
+      let cumulative = 0;
+      for (const model of models) {
+        cumulative += model.weight;
+        if (rand <= cumulative) {
+          return model;
+        }
+      }
+      return models[0];
+    }
+    
+    // Fonction pour générer un nombre aléatoire dans une plage
+    function randomBetween(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+    
+    // Fonction pour générer un nombre décimal aléatoire
+    function randomFloat(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+    
+    // Générer des données pour chaque mois (12 mois)
+    const now = Date.now();
+    const oneYearAgo = now - (365 * 24 * 60 * 60 * 1000);
+    const simulatedExchanges = [];
+    
+    // Variations mensuelles (plus d'activité en hiver, moins en été)
+    const monthlyMultipliers = [
+      1.2, // Janvier
+      1.1, // Février
+      1.0, // Mars
+      0.9, // Avril
+      0.8, // Mai
+      0.7, // Juin
+      0.6, // Juillet
+      0.7, // Août
+      0.9, // Septembre
+      1.0, // Octobre
+      1.1, // Novembre
+      1.2  // Décembre
+    ];
+    
+    // Nombre moyen d'échanges par mois (pour atteindre ~3000 échanges sur 12 mois)
+    const avgExchangesPerMonth = 250;
+    
+    console.log('🎲 Début simulation:', {
+      now: new Date(now).toISOString(),
+      oneYearAgo: new Date(oneYearAgo).toISOString(),
+      avgExchangesPerMonth
+    });
+    
+    for (let month = 0; month < 12; month++) {
+      // Calculer les dates de début et fin du mois de manière plus précise
+      const monthStartDate = new Date(oneYearAgo);
+      monthStartDate.setMonth(monthStartDate.getMonth() + month);
+      monthStartDate.setDate(1);
+      monthStartDate.setHours(0, 0, 0, 0);
+      
+      const monthEndDate = new Date(monthStartDate);
+      monthEndDate.setMonth(monthEndDate.getMonth() + 1);
+      
+      const monthStart = monthStartDate.getTime();
+      const monthEnd = monthEndDate.getTime();
+      const multiplier = monthlyMultipliers[month];
+      const exchangesThisMonth = Math.floor(avgExchangesPerMonth * multiplier);
+      
+      console.log(`📅 Mois ${month + 1}:`, {
+        monthName: monthStartDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+        start: new Date(monthStart).toISOString(),
+        end: new Date(monthEnd).toISOString(),
+        exchanges: exchangesThisMonth,
+        multiplier
+      });
+      
+      for (let i = 0; i < exchangesThisMonth; i++) {
+        // Timestamp aléatoire dans le mois (réparti uniformément)
+        const randomOffset = Math.random() * (monthEnd - monthStart);
+        const timestamp = monthStart + randomOffset;
+        
+        // Vérifier que le timestamp est valide
+        if (isNaN(timestamp) || timestamp < monthStart || timestamp > monthEnd) {
+          console.warn(`⚠️ Timestamp invalide généré pour mois ${month + 1}, échange ${i + 1}`);
+          continue;
+        }
+        
+        // Sélectionner un modèle
+        const model = getRandomModel();
+        const platform = platforms[Math.floor(Math.random() * platforms.length)];
+        
+        // Générer des tokens réalistes (variation selon le mois)
+        const basePromptTokens = randomBetween(10, 500);
+        const baseResponseTokens = randomBetween(50, 2000);
+        
+        // Ajuster selon le mois (plus de tokens en hiver)
+        const promptTokens = Math.floor(basePromptTokens * multiplier);
+        const responseTokens = Math.floor(baseResponseTokens * multiplier);
+        
+        // Générer d'autres métriques
+        const totalDuration = randomBetween(500000000, 5000000000); // nanosecondes
+        const responseDuration = Math.floor(totalDuration * randomFloat(0.7, 0.95));
+        const wordCount = Math.floor(responseTokens * randomFloat(0.6, 0.8));
+        const readingTime = Math.floor(wordCount / 200 * 60); // secondes (200 mots/min)
+        
+        // Calculer l'énergie
+        const energyJoules = model.baseEnergy + 
+                            (promptTokens * model.perToken * 0.3) + 
+                            (responseTokens * model.perToken * 1.0);
+        
+        // Calculer le CO₂ (utiliser moyenne mondiale: 480 gCO₂/kWh)
+        const energyKwh = energyJoules / 3600000;
+        const co2Grams = energyKwh * 480;
+        
+        // Créer l'échange
+        const exchange = {
+          id: `exchange-${timestamp}-${Math.random().toString(36).substr(2, 9)}`,
+          prompt_token_length: promptTokens,
+          response_token_length: responseTokens,
+          total_duration: totalDuration,
+          response_duration: responseDuration,
+          word_count: wordCount,
+          reading_time: readingTime,
+          model_name: model.name,
+          platform: platform,
+          timestamp: timestamp,
+          energy_consumption_llm_total: energyJoules,
+          co2_grams: co2Grams,
+          prediction_source: 'simulated'
+        };
+        
+        simulatedExchanges.push(exchange);
+      }
+    }
+    
+    // Trier par timestamp
+    simulatedExchanges.sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Vérifier la répartition des timestamps
+    const timestampsByMonth = {};
+    simulatedExchanges.forEach(exchange => {
+      const date = new Date(exchange.timestamp);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!timestampsByMonth[monthKey]) {
+        timestampsByMonth[monthKey] = 0;
+      }
+      timestampsByMonth[monthKey]++;
+    });
+    
+    console.log('📊 Répartition des échanges simulés par mois:', {
+      totalExchanges: simulatedExchanges.length,
+      byMonth: Object.keys(timestampsByMonth).sort().map(m => ({
+        month: m,
+        count: timestampsByMonth[m],
+        firstTimestamp: simulatedExchanges.find(e => {
+          const d = new Date(e.timestamp);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === m;
+        })?.timestamp
+      }))
+    });
+    
+    // Fusionner avec l'historique existant
+    const mergedHistory = [...existingHistory, ...simulatedExchanges];
+    
+    // Calculer les nouvelles stats totales
+    const newTotalStats = {
+      requests: existingTotalStats.requests + simulatedExchanges.length,
+      promptTokens: existingTotalStats.promptTokens + simulatedExchanges.reduce((sum, e) => sum + e.prompt_token_length, 0),
+      responseTokens: existingTotalStats.responseTokens + simulatedExchanges.reduce((sum, e) => sum + e.response_token_length, 0),
+      energyJoules: existingTotalStats.energyJoules + simulatedExchanges.reduce((sum, e) => sum + e.energy_consumption_llm_total, 0),
+      co2Grams: existingTotalStats.co2Grams + simulatedExchanges.reduce((sum, e) => sum + e.co2_grams, 0)
+    };
+    
+    // Sauvegarder
+    await chrome.storage.local.set({
+      conversationHistory: mergedHistory,
+      totalStats: newTotalStats
+    });
+    
+    console.log('✅ Simulation terminée:', {
+      exchangesAdded: simulatedExchanges.length,
+      totalExchanges: mergedHistory.length,
+      totalEnergy: newTotalStats.energyJoules,
+      totalCO2: newTotalStats.co2Grams
+    });
+    
+    return {
+      success: true,
+      exchangesAdded: simulatedExchanges.length,
+      totalExchanges: mergedHistory.length,
+      totalEnergy: newTotalStats.energyJoules,
+      totalCO2: newTotalStats.co2Grams
+    };
+    
+  } catch (error) {
+    console.error('❌ Erreur simulation:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
  * Réinitialiser toutes les statistiques (session + total cumulé)
  */
 async function resetAllStats() {
@@ -1035,6 +1271,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
     });
     return true;
+  }
+  
+  if (message.type === 'SIMULATE_ONE_YEAR') {
+    console.log('📨 Message SIMULATE_ONE_YEAR reçu dans background.js');
+    simulateOneYearData().then((result) => {
+      console.log('✅ Simulation terminée, envoi réponse:', result);
+      sendResponse(result);
+    }).catch((error) => {
+      console.error('❌ Erreur simulation dans background:', error);
+      sendResponse({ success: false, error: error.message || String(error) });
+    });
+    return true; // Important: indique qu'on va répondre de manière asynchrone
   }
 });
 
