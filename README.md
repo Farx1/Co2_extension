@@ -1,4 +1,4 @@
-# 🌱 Track Sustainability - CO₂ Impact Tracker for LLMs
+# 🌱 Track Sustainability - CO₂ Impact Tracker for LLMs IBM ESILV Hackathon
 
 Extension Chrome pour estimer et visualiser l'impact carbone (CO₂) de vos requêtes aux modèles de langage (LLM).
 
